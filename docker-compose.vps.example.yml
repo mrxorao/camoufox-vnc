@@ -1,0 +1,48 @@
+# ============================================================
+#  Camoufox VNC - Docker Compose de Produção / VPS
+#  Usa este ficheiro para colocar o Camoufox a correr numa VPS
+# ============================================================
+#
+#  Como usar na VPS:
+#    1. Cria uma pasta na VPS: mkdir -p ~/camoufox && cd ~/camoufox
+#    2. Copia este ficheiro como docker-compose.yml
+#    3. Se o repositório for privado, autentica a VPS no GHCR:
+#       echo $GITHUB_TOKEN | docker login ghcr.io -u mrxorao --password-stdin
+#    4. Inicia o serviço:
+#       docker compose up -d
+#    5. Acede no teu browser a: http://IP_DA_TUA_VPS:5800
+# ============================================================
+
+services:
+  camoufox:
+    image: ghcr.io/mrxorao/camoufox-vnc:latest
+    container_name: camoufox-vnc
+    restart: unless-stopped
+
+    ports:
+      - "5800:5800"      # Interface Web noVNC (http://IP_DA_VPS:5800)
+      - "5900:5900"      # Acesso direto VNC (opcional)
+      - "9377:9377"      # API MCP Stealth Bridge para AGY / OpenCode / Cursor
+
+    environment:
+      - TZ=Europe/Lisbon
+      - RESOLUTION_WIDTH=1366
+      - RESOLUTION_HEIGHT=768
+      - OS_SPOOF=windows
+      - START_URL=https://duckduckgo.com
+      - AUTO_UPDATE=true
+      - ENABLE_CACHE=true
+      # Palavra-passe de acesso ao noVNC na VPS (RECOMENDADO definir para segurança):
+      - VNC_PASSWORD=muda_esta_palavra_passe_segura
+
+    volumes:
+      # Persistência permanente de logins, cookies e histórico
+      - camoufox_profile:/root/profile
+      # Pasta local na VPS onde caem os ficheiros descarregados
+      - ./downloads:/data/downloads:rw
+
+    shm_size: "2gb"
+
+volumes:
+  camoufox_profile:
+    name: camoufox_profile

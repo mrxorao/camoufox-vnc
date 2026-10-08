@@ -16,7 +16,7 @@ Ambiente Docker autónomo e ultra-otimizado para executar o **Camoufox** (fork d
 
 ---
 
-## 🚀 Como Executar
+## 🚀 Como Executar Localmente
 
 ### 1. Iniciar o Contentor
 ```bash
@@ -31,6 +31,23 @@ docker compose up -d
 ```bash
 docker compose down
 ```
+
+---
+
+## ☁️ Como Fazer Deploy numa VPS (1 Ficheiro)
+
+Numa VPS remota (Ubuntu, Debian, etc.), não precisas de clonar todo o repositório nem compilar nada! Basta usar a imagem pré-construída:
+
+1. Cria uma pasta na VPS:
+   ```bash
+   mkdir -p ~/camoufox && cd ~/camoufox
+   ```
+2. Copia o ficheiro [`docker-compose.vps.example.yml`](file:///D:/Projetos/camoufox-vnc/docker-compose.vps.example.yml) para a VPS como `docker-compose.yml`.
+3. Inicia o serviço:
+   ```bash
+   docker compose up -d
+   ```
+4. Acede no teu browser a `http://IP_DA_TUA_VPS:5800`.
 
 ---
 
@@ -54,7 +71,7 @@ Adiciona ao teu ficheiro de configuração MCP (`mcp_config.json` ou `claude_des
 }
 ```
 
-> **Se estiver a correr numa VPS remota:**
+> **Se o Docker estiver a correr numa VPS remota:**
 > Substitui `http://127.0.0.1:9377` por `http://IP_DA_TUA_VPS:9377`.
 
 ---
@@ -91,7 +108,7 @@ Adiciona ao teu ficheiro de configuração MCP (`mcp_config.json` ou `claude_des
 | `TZ` | Fuso horário do sistema | `Europe/Lisbon` |
 | `OS_SPOOF` | Sistema Operativo emulado (`windows`, `macos`, `linux`) | `windows` |
 | `AUTO_UPDATE` | Atualização automática do Camoufox no arranque | `true` |
-| `START_URL` | Página aberta ao iniciar | `https://browserleaks.com` |
+| `START_URL` | Página aberta ao iniciar | `https://duckduckgo.com` |
 | `VNC_PASSWORD` | Palavra-passe de acesso ao VNC (opcional) | *(vazio)* |
 
 ---
@@ -101,18 +118,19 @@ Adiciona ao teu ficheiro de configuração MCP (`mcp_config.json` ou `claude_des
 ```text
 D:\Projetos\camoufox-vnc\
 ├── data/
-│   └── downloads/          # Ficheiros descarregados pelo browser
-├── .env                    # Variáveis de ambiente ativas
-├── .env.example            # Exemplo de variáveis de ambiente
-├── .gitignore              # Regras de exclusão do Git
-├── docker-compose.yml      # Definição e orquestração do serviço
-├── Dockerfile              # Construção da imagem com o motor Camoufox
-├── entrypoint.sh           # Arranque e rotina de auto-update
-├── launch-camoufox.py      # Motor Stealth C++ e API HTTP
-├── launch-x11vnc.sh        # Servidor VNC
-├── mcp_vnc_bridge.js       # Bridge MCP universal
-├── openbox-rc.xml          # Configuração do gestor de janelas
-├── package.json            # Dependências MCP SDK
-├── README.md               # Documentação completa
-└── supervisord.conf        # Gestão de processos internos
+│   └── downloads/                  # Ficheiros descarregados pelo browser
+├── .env                            # Variáveis de ambiente ativas
+├── .env.example                    # Exemplo de variáveis de ambiente
+├── .gitignore                      # Regras de exclusão do Git
+├── docker-compose.yml              # Compose para desenvolvimento local
+├── docker-compose.vps.example.yml  # Compose pronto para deploy em VPS
+├── Dockerfile                      # Imagem Docker com motor Camoufox
+├── entrypoint.sh                   # Arranque e rotina de auto-update
+├── launch-camoufox.py              # Motor Stealth C++ e API HTTP
+├── launch-x11vnc.sh                # Servidor VNC
+├── mcp_vnc_bridge.js               # Bridge MCP universal
+├── openbox-rc.xml                  # Configuração do gestor de janelas
+├── package.json                    # Dependências MCP SDK
+├── README.md                       # Documentação completa
+└── supervisord.conf                # Gestão de processos internos
 ```
