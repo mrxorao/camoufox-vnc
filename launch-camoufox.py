@@ -137,6 +137,26 @@ def main():
 
     start_api_server(port=api_port)
 
+    # Assegurar políticas corporativas com suporte a Containers
+    try:
+        import glob
+        for p in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json", recursive=True):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data.setdefault("policies", {})
+                data["policies"]["Containers"] = {"Enabled": True}
+                data["policies"].setdefault("ExtensionSettings", {})
+                data["policies"]["ExtensionSettings"]["@testpilot-containers"] = {
+                    "default_area": "navbar"
+                }
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Camoufox] Aviso ao atualizar policies.json: {e}", flush=True)
+
     # Preferências do Firefox para DuckDuckGo e Multi-Account Containers
     firefox_prefs = {
         "browser.startup.homepage": "https://duckduckgo.com",
@@ -154,6 +174,25 @@ def main():
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
     }
+
+    # Gravar user.js diretamente no diretório do perfil para persistência imediata
+    try:
+        os.makedirs(profile_dir, exist_ok=True)
+        user_js_path = os.path.join(profile_dir, "user.js")
+        user_js_lines = []
+        for k, v in firefox_prefs.items():
+            if isinstance(v, bool):
+                val_str = "true" if v else "false"
+            elif isinstance(v, int):
+                val_str = str(v)
+            else:
+                val_str = f'"{v}"'
+            user_js_lines.append(f'user_pref("{k}", {val_str});')
+        with open(user_js_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(user_js_lines) + "\n")
+        print(f"[Camoufox Stealth Engine] user.js configurado com sucesso no perfil.", flush=True)
+    except Exception as e:
+        print(f"[Camoufox Stealth Engine] Aviso ao escrever user.js: {e}", flush=True)
 
     proxy_server = os.getenv("PROXY_SERVER", "").strip()
     proxy_config = None
@@ -173,6 +212,7 @@ def main():
         "os": os_spoof,
         "humanize": False,
         "enable_cache": enable_cache,
+        "allow_addon_new_tab": True,
         "firefox_user_prefs": firefox_prefs,
     }
     if proxy_config:
