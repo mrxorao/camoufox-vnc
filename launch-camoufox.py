@@ -121,17 +121,33 @@ def main():
         "browser.search.suggest.enabled": True,
     }
 
+    proxy_server = os.getenv("PROXY_SERVER", "").strip()
+    proxy_config = None
+    if proxy_server:
+        proxy_config = {"server": proxy_server}
+        proxy_user = os.getenv("PROXY_USERNAME", "").strip()
+        proxy_pass = os.getenv("PROXY_PASSWORD", "").strip()
+        if proxy_user:
+            proxy_config["username"] = proxy_user
+            proxy_config["password"] = proxy_pass
+        print(f"[Camoufox Stealth Engine] A usar Proxy: {proxy_server}", flush=True)
+
+    camoufox_kwargs = {
+        "headless": False,
+        "persistent_context": True,
+        "user_data_dir": profile_dir,
+        "os": os_spoof,
+        "humanize": False,
+        "enable_cache": enable_cache,
+        "firefox_user_prefs": firefox_prefs,
+    }
+    if proxy_config:
+        camoufox_kwargs["proxy"] = proxy_config
+        camoufox_kwargs["geoip"] = True
+
     try:
         # Iniciar Camoufox com motor C++ Stealth
-        with Camoufox(
-            headless=False,
-            persistent_context=True,
-            user_data_dir=profile_dir,
-            os=os_spoof,
-            humanize=False,
-            enable_cache=enable_cache,
-            firefox_user_prefs=firefox_prefs,
-        ) as browser:
+        with Camoufox(**camoufox_kwargs) as browser:
             page = browser.pages[0] if browser.pages else browser.new_page()
             active_tab_index = 0
             
