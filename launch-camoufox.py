@@ -121,6 +121,27 @@ def fix_search_policies():
         except Exception as e:
             print(f"[Camoufox Config Warning] Aviso ao configurar policies.json: {e}", flush=True)
 
+def cleanup_profile_locks(profile_dir):
+    try:
+        import glob
+        lock_patterns = [
+            os.path.join(profile_dir, "*lock*"),
+            os.path.join(profile_dir, ".*lock*"),
+            os.path.join(profile_dir, "lock"),
+            os.path.join(profile_dir, ".parentlock"),
+            os.path.join(profile_dir, "parent.lock"),
+        ]
+        for pattern in lock_patterns:
+            for lock_file in glob.glob(pattern):
+                try:
+                    if os.path.exists(lock_file) or os.path.islink(lock_file):
+                        os.remove(lock_file)
+                        print(f"[Camoufox] Lock antigo removido: {lock_file}", flush=True)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[Camoufox] Aviso ao limpar locks: {e}", flush=True)
+
 def main():
     global status_cache
     profile_dir = os.getenv("PROFILE_DIR", "/root/profile")
