@@ -137,7 +137,8 @@ def main():
 
     start_api_server(port=api_port)
 
-        # Preferências do Firefox para DuckDuckGo e Multi-Account Containers
+    # Preferências do Firefox para DuckDuckGo e Multi-Account Containers
+    firefox_prefs = {
         "browser.startup.homepage": "https://duckduckgo.com",
         "browser.startup.page": 1,
         "browser.search.defaultenginename": "DuckDuckGo",
