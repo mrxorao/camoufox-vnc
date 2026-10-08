@@ -191,8 +191,26 @@ def main():
         with open(user_js_path, "w", encoding="utf-8") as f:
             f.write("\n".join(user_js_lines) + "\n")
         print(f"[Camoufox Stealth Engine] user.js configurado com sucesso no perfil.", flush=True)
+
+        # Assegurar containers.json inicializado
+        containers_path = os.path.join(profile_dir, "containers.json")
+        if not os.path.exists(containers_path) or os.path.getsize(containers_path) < 20:
+            default_containers = {
+                "version": 4,
+                "lastUserContextId": 4,
+                "identities": [
+                    {"userContextId": 1, "name": "Personal", "icon": "fingerprint", "color": "blue", "public": True},
+                    {"userContextId": 2, "name": "Work", "icon": "briefcase", "color": "orange", "public": True},
+                    {"userContextId": 3, "name": "Banking", "icon": "dollar", "color": "green", "public": True},
+                    {"userContextId": 4, "name": "Shopping", "icon": "cart", "color": "pink", "public": True},
+                ],
+                "siteAssociations": {}
+            }
+            with open(containers_path, "w", encoding="utf-8") as f:
+                json.dump(default_containers, f, indent=2)
+            print(f"[Camoufox Stealth Engine] containers.json inicializado com 4 categorias padrão.", flush=True)
     except Exception as e:
-        print(f"[Camoufox Stealth Engine] Aviso ao escrever user.js: {e}", flush=True)
+        print(f"[Camoufox Stealth Engine] Aviso ao escrever user.js / containers.json: {e}", flush=True)
 
     proxy_server = os.getenv("PROXY_SERVER", "").strip()
     proxy_config = None
