@@ -287,7 +287,9 @@ def main():
 
                     try:
                         endpoint, data, done_event, result_holder = command_queue.get(timeout=0.2)
-                    
+                    except queue.Empty:
+                        continue
+
                     if not browser.pages:
                         browser.new_page()
                     if active_tab_index >= len(browser.pages):
@@ -485,9 +487,6 @@ def main():
 
                     finally:
                         done_event.set()
-
-                except queue.Empty:
-                    pass
 
         except Exception as err:
             if shutdown_requested:
