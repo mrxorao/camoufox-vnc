@@ -315,7 +315,7 @@ def main():
                     curr_page = active_pages[active_tab_index]
 
                     # Teste de vida da janela ativa
-                    curr_page.evaluate("1", timeout=1000)
+                    curr_page.evaluate("1")
                 except Exception as e:
                     print(f"[Camoufox] Janela ou processo do navegador fechado ({e}). A reiniciar...", flush=True)
                     break
