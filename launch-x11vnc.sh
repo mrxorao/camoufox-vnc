@@ -6,7 +6,7 @@ if command -v setxkbmap >/dev/null 2>&1; then
     setxkbmap -display :99 -model pc105 -layout pt,us 2>/dev/null || true
 fi
 
-X11VNC_ARGS="-display :99 -forever -shared -rfbport 5900 -noxdamage -wait 50 -xkb -repeat"
+X11VNC_ARGS="-display :99 -forever -shared -rfbport 5900 -noxdamage -wait 50 -xkb -capslock -add_keysyms -repeat"
 
 if [ -n "$VNC_PASSWORD" ]; then
     echo "[VNC] A ativar proteção por palavra-passe para VNC/noVNC..."
