@@ -304,28 +304,26 @@ def main():
                 pass
 
             while running and browser_is_active:
-                if getattr(browser, "is_closed", lambda: False)():
-                    print("[Camoufox] Navegador fechado pelo utilizador. A reiniciar...", flush=True)
-                    break
-
                 try:
                     active_pages = [p for p in browser.pages if not p.is_closed()]
-                except Exception:
-                    print("[Camoufox] Sessão do navegador terminada. A reiniciar...", flush=True)
-                    break
+                    if not active_pages:
+                        print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
+                        break
 
-                if not active_pages:
-                    print("[Camoufox] Todas as abas fechadas pelo utilizador. A reiniciar...", flush=True)
+                    if active_tab_index >= len(active_pages):
+                        active_tab_index = len(active_pages) - 1
+                    curr_page = active_pages[active_tab_index]
+
+                    # Teste de vida da janela ativa
+                    curr_page.evaluate("1", timeout=1000)
+                except Exception as e:
+                    print(f"[Camoufox] Janela ou processo do navegador fechado ({e}). A reiniciar...", flush=True)
                     break
 
                 try:
                     endpoint, data, done_event, result_holder = command_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
-
-                if active_tab_index >= len(active_pages):
-                    active_tab_index = len(active_pages) - 1
-                curr_page = active_pages[active_tab_index]
 
                 try:
                     if endpoint == '/navigate':
