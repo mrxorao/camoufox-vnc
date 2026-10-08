@@ -95,11 +95,37 @@ def safe_get_title(page):
     except Exception:
         return ""
 
+def fix_search_policies():
+    import glob
+    for pfile in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json", recursive=True):
+        try:
+            with open(pfile, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data.setdefault("policies", {})["SearchEngines"] = {
+                "PreventInstalls": False,
+                "Default": "DuckDuckGo",
+                "Add": [
+                    {
+                        "Name": "DuckDuckGo",
+                        "Description": "DuckDuckGo Search",
+                        "Alias": "@ddg",
+                        "Method": "GET",
+                        "URLTemplate": "https://duckduckgo.com/?q={searchTerms}"
+                    }
+                ]
+            }
+            with open(pfile, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            print(f"[Camoufox Config] Motor de pesquisa DuckDuckGo configurado em: {pfile}", flush=True)
+        except Exception as e:
+            print(f"[Camoufox Config Warning] Aviso ao configurar policies.json: {e}", flush=True)
+
 def main():
     global status_cache
     profile_dir = os.getenv("PROFILE_DIR", "/root/profile")
     os.makedirs(profile_dir, exist_ok=True)
     cleanup_profile_locks(profile_dir)
+    fix_search_policies()
     
     start_url = os.getenv("START_URL", "https://duckduckgo.com")
     os_spoof = os.getenv("OS_SPOOF", "windows")
@@ -119,6 +145,8 @@ def main():
         "browser.search.order.1": "DuckDuckGo",
         "browser.urlbar.placeholderName": "DuckDuckGo",
         "browser.search.suggest.enabled": True,
+        "browser.urlbar.suggest.searches": True,
+        "keyword.enabled": True,
     }
 
     proxy_server = os.getenv("PROXY_SERVER", "").strip()

@@ -22,6 +22,27 @@ if [ "${AUTO_UPDATE:-true}" = "true" ]; then
     echo "============================================================"
 fi
 
+# Configurar motor de pesquisa padrão (DuckDuckGo) no policies.json de todas as versões do Camoufox
+python3 -c '
+import glob, json
+for p in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json", recursive=True):
+    try:
+        with open(p, "r") as f: d = json.load(f)
+        d.setdefault("policies", {})["SearchEngines"] = {
+            "PreventInstalls": False,
+            "Default": "DuckDuckGo",
+            "Add": [{
+                "Name": "DuckDuckGo",
+                "Description": "DuckDuckGo Search",
+                "Alias": "@ddg",
+                "Method": "GET",
+                "URLTemplate": "https://duckduckgo.com/?q={searchTerms}"
+            }]
+        }
+        with open(p, "w") as f: json.dump(d, f, indent=2)
+    except Exception: pass
+'
+
 echo "============================================================"
 echo "  🚀 Camoufox VNC Stealth Browser Server"
 echo "  🌐 Interface Web noVNC: http://localhost:${PORT_WEB:-5800}"
