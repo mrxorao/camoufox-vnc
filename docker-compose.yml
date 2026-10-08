@@ -15,7 +15,7 @@ services:
       - RESOLUTION_WIDTH=${RESOLUTION_WIDTH:-1366}
       - RESOLUTION_HEIGHT=${RESOLUTION_HEIGHT:-768}
       - OS_SPOOF=${OS_SPOOF:-windows}
-      - START_URL=${START_URL:-https://browserleaks.com}
+      - START_URL=${START_URL:-https://duckduckgo.com}
       - VNC_PASSWORD=${VNC_PASSWORD:-}
       - AUTO_UPDATE=${AUTO_UPDATE:-true}
       - ENABLE_CACHE=true

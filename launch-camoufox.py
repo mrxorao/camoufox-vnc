@@ -101,7 +101,7 @@ def main():
     os.makedirs(profile_dir, exist_ok=True)
     cleanup_profile_locks(profile_dir)
     
-    start_url = os.getenv("START_URL", "https://pplware.sapo.pt")
+    start_url = os.getenv("START_URL", "https://duckduckgo.com")
     os_spoof = os.getenv("OS_SPOOF", "windows")
     enable_cache = get_env_bool("ENABLE_CACHE", True)
     api_port = int(os.getenv("PORT_API", "9377"))
@@ -110,6 +110,16 @@ def main():
     print(f"[Camoufox Stealth Engine] Emulação SO: {os_spoof}", flush=True)
 
     start_api_server(port=api_port)
+
+    # Preferências do Firefox para DuckDuckGo como homepage e motor de pesquisa padrão
+    firefox_prefs = {
+        "browser.startup.homepage": "https://duckduckgo.com",
+        "browser.startup.page": 1,
+        "browser.search.defaultenginename": "DuckDuckGo",
+        "browser.search.order.1": "DuckDuckGo",
+        "browser.urlbar.placeholderName": "DuckDuckGo",
+        "browser.search.suggest.enabled": True,
+    }
 
     try:
         # Iniciar Camoufox com motor C++ Stealth
@@ -120,6 +130,7 @@ def main():
             os=os_spoof,
             humanize=False,
             enable_cache=enable_cache,
+            firefox_user_prefs=firefox_prefs,
         ) as browser:
             page = browser.pages[0] if browser.pages else browser.new_page()
             active_tab_index = 0
@@ -298,7 +309,7 @@ def main():
 
                         elif endpoint == '/new_tab':
                             new_p = browser.new_page()
-                            url_t = data.get('url', 'https://google.com')
+                            url_t = data.get('url', 'https://duckduckgo.com')
                             if url_t and url_t != 'about:blank':
                                 try:
                                     new_p.goto(url_t, wait_until="commit", timeout=15000)
