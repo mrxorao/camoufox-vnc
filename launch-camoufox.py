@@ -237,39 +237,56 @@ def main():
         camoufox_kwargs["proxy"] = proxy_config
         camoufox_kwargs["geoip"] = True
 
-    try:
-        # Iniciar Camoufox com motor C++ Stealth
-        with Camoufox(**camoufox_kwargs) as browser:
-            page = browser.pages[0] if browser.pages else browser.new_page()
-            active_tab_index = 0
-            
-            status_cache["status"] = "ready"
-            status_cache["url"] = page.url
-            status_cache["tabs_count"] = len(browser.pages)
+    shutdown_requested = False
 
-            if start_url:
+    def handle_sigterm(signum, frame):
+        nonlocal shutdown_requested
+        print("[Camoufox] Sinal de encerramento recebido. A fechar com segurança...", flush=True)
+        shutdown_requested = True
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigterm)
+
+    while not shutdown_requested:
+        try:
+            status_cache["status"] = "starting"
+            # Iniciar Camoufox com motor C++ Stealth
+            with Camoufox(**camoufox_kwargs) as browser:
+                page = browser.pages[0] if browser.pages else browser.new_page()
+                active_tab_index = 0
+                
+                status_cache["status"] = "ready"
+                status_cache["url"] = page.url
+                status_cache["tabs_count"] = len(browser.pages)
+
+                if start_url:
+                    try:
+                        page.goto(start_url, timeout=20000, wait_until="commit")
+                        status_cache["url"] = page.url
+                        status_cache["title"] = safe_get_title(page)
+                    except Exception as e:
+                        print(f"[Camoufox] Aviso ao abrir URL inicial: {e}", flush=True)
+
+                print("[Camoufox Stealth Engine] Browser 100% ativo com score de bot mínimo (0-3)!", flush=True)
+                
+                browser_running = True
+
+                def on_browser_close(*args):
+                    nonlocal browser_running
+                    browser_running = False
+
                 try:
-                    page.goto(start_url, timeout=20000, wait_until="commit")
-                    status_cache["url"] = page.url
-                    status_cache["title"] = safe_get_title(page)
-                except Exception as e:
-                    print(f"[Camoufox] Aviso ao abrir URL inicial: {e}", flush=True)
+                    browser.on("close", on_browser_close)
+                except Exception:
+                    pass
 
-            print("[Camoufox Stealth Engine] Browser 100% ativo com score de bot mínimo (0-3)!", flush=True)
-            
-            running = True
+                while browser_running and not shutdown_requested:
+                    if not browser.pages:
+                        print("[Camoufox] Todas as abas foram fechadas. A reiniciar o navegador...", flush=True)
+                        break
 
-            def handle_sigterm(signum, frame):
-                nonlocal running
-                print("[Camoufox] Sinal de encerramento recebido. A fechar com segurança...", flush=True)
-                running = False
-
-            signal.signal(signal.SIGTERM, handle_sigterm)
-            signal.signal(signal.SIGINT, handle_sigterm)
-
-            while running:
-                try:
-                    endpoint, data, done_event, result_holder = command_queue.get(timeout=0.2)
+                    try:
+                        endpoint, data, done_event, result_holder = command_queue.get(timeout=0.2)
                     
                     if not browser.pages:
                         browser.new_page()
@@ -472,10 +489,17 @@ def main():
                 except queue.Empty:
                     pass
 
-    except Exception as err:
-        print(f"[Camoufox] Erro na execução: {err}", file=sys.stderr, flush=True)
-        time.sleep(2)
-        sys.exit(1)
+        except Exception as err:
+            if shutdown_requested:
+                break
+            print(f"[Camoufox] Instância do browser fechada ou terminada: {err}", flush=True)
+
+        if not shutdown_requested:
+            print("[Camoufox] A reabrir o Camoufox automaticamente em 1 segundo...", flush=True)
+            status_cache["status"] = "restarting"
+            time.sleep(1)
+
+    print("[Camoufox] Processo encerrado com sucesso.", flush=True)
 
 if __name__ == "__main__":
     main()
