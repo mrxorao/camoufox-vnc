@@ -137,8 +137,7 @@ def main():
 
     start_api_server(port=api_port)
 
-    # Preferências do Firefox para DuckDuckGo como homepage e motor de pesquisa padrão
-    firefox_prefs = {
+        # Preferências do Firefox para DuckDuckGo e Multi-Account Containers
         "browser.startup.homepage": "https://duckduckgo.com",
         "browser.startup.page": 1,
         "browser.search.defaultenginename": "DuckDuckGo",
@@ -147,6 +146,12 @@ def main():
         "browser.search.suggest.enabled": True,
         "browser.urlbar.suggest.searches": True,
         "keyword.enabled": True,
+        # Multi-Account Containers
+        "privacy.userContext.enabled": True,
+        "privacy.userContext.ui.enabled": True,
+        "privacy.userContext.longPressBehavior": 2,
+        "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
+        "privacy.userContext.extension": "@testpilot-containers",
     }
 
     proxy_server = os.getenv("PROXY_SERVER", "").strip()
