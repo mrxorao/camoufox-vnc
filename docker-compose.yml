@@ -1,0 +1,29 @@
+services:
+  camoufox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: camoufox-vnc:latest
+    container_name: camoufox-vnc
+    restart: unless-stopped
+    ports:
+      - "${PORT_WEB:-5800}:5800"      # Interface Web noVNC (http://localhost:5800)
+      - "${PORT_VNC:-5900}:5900"      # Acesso direto VNC (localhost:5900)
+      - "${PORT_API:-9377}:9377"      # API MCP Stealth Bridge
+    environment:
+      - TZ=${TZ:-Europe/Lisbon}
+      - RESOLUTION_WIDTH=${RESOLUTION_WIDTH:-1366}
+      - RESOLUTION_HEIGHT=${RESOLUTION_HEIGHT:-768}
+      - OS_SPOOF=${OS_SPOOF:-windows}
+      - START_URL=${START_URL:-https://browserleaks.com}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
+      - AUTO_UPDATE=${AUTO_UPDATE:-true}
+      - ENABLE_CACHE=true
+    volumes:
+      - camoufox_profile:/root/profile
+      - ./data/downloads:/data/downloads:rw
+    shm_size: "2gb"
+
+volumes:
+  camoufox_profile:
+    name: camoufox_profile

@@ -1,0 +1,18 @@
+# Dados persistentes do browser (perfis, cookies, downloads)
+data/
+data/*
+
+# Node / Dependências locais
+node_modules/
+package-lock.json
+
+# Ambiente local e segredos
+.env
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
