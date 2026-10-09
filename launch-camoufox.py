@@ -308,46 +308,46 @@ def main():
                     pass
             threading.Thread(target=ensure_window_focus, daemon=True).start()
 
-            browser_is_active = True
-
-            def on_browser_close(*args):
-                nonlocal browser_is_active
-                print("[Camoufox] Evento de fecho do navegador detetado.", flush=True)
-                browser_is_active = False
+            # Verificação 100% fiável do processo principal Camoufox em /proc
+            def is_browser_process_alive():
                 try:
-                    command_queue.put((None, None, None, None))
+                    import glob
+                    for cmdline_file in glob.glob("/proc/[0-9]*/cmdline"):
+                        try:
+                            with open(cmdline_file, "rb") as f:
+                                content = f.read().decode('utf-8', errors='ignore')
+                                if "camoufox-bin" in content and "-contentproc" not in content and "python" not in content:
+                                    return True
+                        except Exception:
+                            continue
                 except Exception:
                     pass
+                return False
 
-            try:
-                browser.on("close", on_browser_close)
-            except Exception:
-                pass
-
-            # Dar 1 segundo para estabilização do processo
-            time.sleep(1.0)
-
-            while running and browser_is_active:
-                try:
-                    if hasattr(browser, "is_closed") and browser.is_closed():
-                        print("[Camoufox] Contexto fechado detetado. A reiniciar...", flush=True)
+            # Watchdog independente para deteção instantânea de fecho da janela/processo pelo utilizador
+            def browser_watchdog():
+                # Esperar até que o browser arranque inicialmente
+                for _ in range(30):
+                    time.sleep(0.5)
+                    if is_browser_process_alive():
                         break
-                except Exception:
-                    break
 
-                # Verificar se o processo binário do camoufox ainda está vivo no Linux
-                if os.system("pgrep -f 'camoufox-bin' >/dev/null 2>&1") != 0:
-                    print("[Camoufox] Processo camoufox-bin fechado. A reiniciar...", flush=True)
-                    break
+                consecutive_dead = 0
+                while running:
+                    time.sleep(0.5)
+                    if not is_browser_process_alive():
+                        consecutive_dead += 1
+                        if consecutive_dead >= 2:  # 1 segundo consecutivo sem processo principal
+                            print("[Camoufox Watchdog] Processo principal do Camoufox fechado pelo utilizador. A reiniciar...", flush=True)
+                            os.system("pkill -9 -f 'camoufox-bin' 2>/dev/null || true")
+                            cleanup_profile_locks(profile_dir)
+                            os._exit(0)
+                    else:
+                        consecutive_dead = 0
 
-                try:
-                    active_pages = [p for p in browser.pages if not p.is_closed()]
-                    if not active_pages:
-                        print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
-                        break
-                except Exception:
-                    break
+            threading.Thread(target=browser_watchdog, daemon=True).start()
 
+            while running:
                 try:
                     item = command_queue.get(timeout=0.5)
                     if not item or item[0] is None:
@@ -357,14 +357,17 @@ def main():
                     continue
 
                 # Garantir página ativa válida para o comando
-                active_pages = [p for p in browser.pages if not p.is_closed()]
-                if not active_pages:
-                    curr_page = browser.new_page()
-                    active_tab_index = 0
-                else:
-                    if active_tab_index >= len(active_pages):
-                        active_tab_index = len(active_pages) - 1
-                    curr_page = active_pages[active_tab_index]
+                try:
+                    active_pages = [p for p in browser.pages if not p.is_closed()]
+                    if not active_pages:
+                        curr_page = browser.new_page()
+                        active_tab_index = 0
+                    else:
+                        if active_tab_index >= len(active_pages):
+                            active_tab_index = len(active_pages) - 1
+                        curr_page = active_pages[active_tab_index]
+                except Exception:
+                    continue
 
                 try:
                     if endpoint == '/navigate':
