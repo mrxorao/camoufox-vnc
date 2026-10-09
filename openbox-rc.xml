@@ -11,7 +11,7 @@
     <followMouse>no</followMouse>
     <focusLast>yes</focusLast>
     <underMouse>no</underMouse>
-    <focusDelay>200</focusDelay>
+    <focusDelay>0</focusDelay>
     <raiseOnFocus>yes</raiseOnFocus>
   </focus>
 
@@ -39,6 +39,31 @@
     <dragThreshold>8</dragThreshold>
     <doubleClickTime>500</doubleClickTime>
     <screenEdgeWarpTime>0</screenEdgeWarpTime>
+
+    <context name="Frame">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Left" action="Click">
+        <action name="Unshade"/>
+      </mousebind>
+    </context>
+
+    <context name="Client">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Middle" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
 
     <context name="Root">
       <mousebind button="Left" action="Click">
@@ -85,6 +110,7 @@
 
   <applications>
     <application class="*">
+      <focus>yes</focus>
       <maximized>yes</maximized>
       <decor>yes</decor>
     </application>

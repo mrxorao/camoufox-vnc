@@ -195,6 +195,13 @@ def main():
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
+        # Prevenção de ecrãs de restauro e prompts que bloqueiam o input do utilizador
+        "browser.sessionstore.resume_from_crash": False,
+        "browser.sessionstore.max_resumed_crashes": 0,
+        "toolkit.startup.max_resumed_crashes": -1,
+        "browser.tabs.warnOnClose": False,
+        "browser.tabs.warnOnCloseOtherTabs": False,
+        "browser.warnOnQuit": False,
     }
 
     # Gravar user.js diretamente no diretório do perfil para persistência imediata
@@ -291,6 +298,16 @@ def main():
 
             print("[Camoufox Stealth Engine] Browser 100% ativo com score de bot mínimo (0-3)!", flush=True)
 
+            # Assegurar foco de janela e reset de modificadores de teclado no X11
+            def ensure_window_focus():
+                time.sleep(1.0)
+                try:
+                    os.system("xdotool keyup Alt_L Alt_R Control_L Control_R Shift_L Shift_R Super_L Super_R 2>/dev/null || true")
+                    os.system("xdotool search --onlyvisible --name '.*' windowactivate --sync 2>/dev/null || true")
+                except Exception:
+                    pass
+            threading.Thread(target=ensure_window_focus, daemon=True).start()
+
             browser_is_active = True
 
             def on_browser_close(*args):
@@ -304,26 +321,29 @@ def main():
                 pass
 
             while running and browser_is_active:
-                try:
-                    active_pages = [p for p in browser.pages if not p.is_closed()]
-                    if not active_pages:
-                        print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
-                        break
+                if hasattr(browser, "is_connected") and not browser.is_connected():
+                    print("[Camoufox] Ligação ao processo do navegador perdida. A reiniciar...", flush=True)
+                    break
 
-                    if active_tab_index >= len(active_pages):
-                        active_tab_index = len(active_pages) - 1
-                    curr_page = active_pages[active_tab_index]
-
-                    # Teste de vida da janela ativa
-                    curr_page.evaluate("1")
-                except Exception as e:
-                    print(f"[Camoufox] Janela ou processo do navegador fechado ({e}). A reiniciar...", flush=True)
+                active_pages = [p for p in browser.pages if not p.is_closed()]
+                if not active_pages:
+                    print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
                     break
 
                 try:
                     endpoint, data, done_event, result_holder = command_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
+
+                # Garantir página ativa válida para o comando
+                active_pages = [p for p in browser.pages if not p.is_closed()]
+                if not active_pages:
+                    curr_page = browser.new_page()
+                    active_tab_index = 0
+                else:
+                    if active_tab_index >= len(active_pages):
+                        active_tab_index = len(active_pages) - 1
+                    curr_page = active_pages[active_tab_index]
 
                 try:
                     if endpoint == '/navigate':
