@@ -42,6 +42,11 @@ services:
       - ./downloads:/data/downloads:rw
 
     shm_size: "2gb"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3072M
 
 volumes:
   camoufox_profile:
