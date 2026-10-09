@@ -40,16 +40,6 @@
     <doubleClickTime>500</doubleClickTime>
     <screenEdgeWarpTime>0</screenEdgeWarpTime>
 
-    <context name="Frame">
-      <mousebind button="Left" action="Press">
-        <action name="Focus"/>
-        <action name="Raise"/>
-      </mousebind>
-      <mousebind button="Left" action="Click">
-        <action name="Unshade"/>
-      </mousebind>
-    </context>
-
     <context name="Root">
       <mousebind button="Left" action="Click">
         <action name="NextWindow">
@@ -94,10 +84,46 @@
   </mouse>
 
   <applications>
-    <application class="*">
+    <!-- Janelas normais do Browser (Camoufox / Firefox) maximizadas com decorações -->
+    <application type="normal">
       <focus>yes</focus>
       <maximized>yes</maximized>
       <decor>yes</decor>
+    </application>
+
+    <!-- Caixas de diálogo não maximizadas -->
+    <application type="dialog">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>yes</decor>
+      <center>yes</center>
+    </application>
+
+    <!-- Menus, popups, toolbars e painéis de extensões sem decorações e sem maximização -->
+    <application type="menu">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>no</decor>
+    </application>
+    <application type="popup_menu">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>no</decor>
+    </application>
+    <application type="utility">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>no</decor>
+    </application>
+    <application type="toolbar">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>no</decor>
+    </application>
+    <application type="splash">
+      <focus>yes</focus>
+      <maximized>no</maximized>
+      <decor>no</decor>
     </application>
   </applications>
 
