@@ -314,24 +314,45 @@ def main():
                 nonlocal browser_is_active
                 print("[Camoufox] Evento de fecho do navegador detetado.", flush=True)
                 browser_is_active = False
+                try:
+                    command_queue.put((None, None, None, None))
+                except Exception:
+                    pass
 
             try:
                 browser.on("close", on_browser_close)
             except Exception:
                 pass
 
+            # Dar 1 segundo para estabilização do processo
+            time.sleep(1.0)
+
             while running and browser_is_active:
-                if hasattr(browser, "is_connected") and not browser.is_connected():
-                    print("[Camoufox] Ligação ao processo do navegador perdida. A reiniciar...", flush=True)
+                try:
+                    if hasattr(browser, "is_closed") and browser.is_closed():
+                        print("[Camoufox] Contexto fechado detetado. A reiniciar...", flush=True)
+                        break
+                except Exception:
                     break
 
-                active_pages = [p for p in browser.pages if not p.is_closed()]
-                if not active_pages:
-                    print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
+                # Verificar se o processo binário do camoufox ainda está vivo no Linux
+                if os.system("pgrep -f 'camoufox-bin' >/dev/null 2>&1") != 0:
+                    print("[Camoufox] Processo camoufox-bin fechado. A reiniciar...", flush=True)
                     break
 
                 try:
-                    endpoint, data, done_event, result_holder = command_queue.get(timeout=0.5)
+                    active_pages = [p for p in browser.pages if not p.is_closed()]
+                    if not active_pages:
+                        print("[Camoufox] Todas as abas foram fechadas. A reiniciar...", flush=True)
+                        break
+                except Exception:
+                    break
+
+                try:
+                    item = command_queue.get(timeout=0.5)
+                    if not item or item[0] is None:
+                        continue
+                    endpoint, data, done_event, result_holder = item
                 except queue.Empty:
                     continue
 
@@ -542,6 +563,7 @@ def main():
     finally:
         status_cache["status"] = "restarting"
         print("[Camoufox] Processo a terminar para reinício automático pelo supervisord...", flush=True)
+        cleanup_profile_locks(profile_dir)
         time.sleep(0.5)
         sys.exit(0)
 
