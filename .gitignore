@@ -1,12 +1,12 @@
-# Dados persistentes do browser (perfis, cookies, downloads)
+# Persistent browser data (profiles, cookies, downloads)
 data/
 data/*
 
-# Node / Dependências locais
+# Node / Local dependencies
 node_modules/
 package-lock.json
 
-# Ambiente local e segredos
+# Local environment and secrets
 .env
 
 # Logs

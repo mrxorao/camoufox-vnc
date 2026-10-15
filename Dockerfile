@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Europe/Lisbon \
     PYTHONUNBUFFERED=1
 
-# Instalar dependências de sistema, Xvfb, Openbox, x11vnc, noVNC, websockify, Python, fontes e utilitários
+# Install system dependencies, Xvfb, Openbox, x11vnc, noVNC, websockify, Python, fonts and utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     openbox \
@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
-    # Dependências gráficas e do Firefox/Camoufox
+    # Graphical and Firefox/Camoufox dependencies
     libgtk-3-0 \
     libasound2 \
     libdbus-glib-1-2 \
@@ -50,31 +50,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mesa-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Criar ambiente virtual Python e instalar Camoufox + Playwright
+# Create a Python virtual environment and install Camoufox + Playwright
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir "camoufox[geoip]" playwright
 
-# Baixar os binários nativos do Camoufox (Gecko engine com stealth C++)
+# Download the native Camoufox binaries (Gecko engine with C++ stealth)
 RUN python3 -m camoufox fetch
 
-# Criar diretórios de perfil, supervisor e configurações do Openbox
+# Create profile, supervisor and Openbox config directories
 RUN mkdir -p /root/profile /data/downloads /var/log/supervisor /etc/supervisor/conf.d /etc/xdg/openbox /root/.config/openbox
 
-# Copiar ficheiros de configuração do Openbox
+# Copy Openbox config files
 COPY openbox-rc.xml /etc/xdg/openbox/rc.xml
 COPY openbox-rc.xml /root/.config/openbox/rc.xml
 
-# Copiar configurações do Supervisor e scripts de arranque diretamente para a imagem
+# Copy Supervisor configs and startup scripts directly into the image
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 COPY launch-camoufox.py /launch-camoufox.py
 COPY launch-x11vnc.sh /launch-x11vnc.sh
 RUN chmod +x /entrypoint.sh /launch-x11vnc.sh /launch-camoufox.py
 
-# Redirecionamento automático para o noVNC (entra direto sem clicar em "Conectar")
+# Automatic noVNC redirect (direct entry without clicking "Connect")
 COPY novnc-index.html /usr/share/novnc/index.html
 
 EXPOSE 5800 5900 9377

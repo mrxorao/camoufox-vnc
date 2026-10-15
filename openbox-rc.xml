@@ -23,7 +23,7 @@
 
   <theme>
     <name>Clearlooks</name>
-    <!-- Layout do título: Ícone (N), Título (L), Maximizar (M), Fechar (C) -->
+    <!-- Title layout: Icon (N), Title (L), Maximize (M), Close (C) -->
     <titleLayout>NLMC</titleLayout>
     <keepBorder>yes</keepBorder>
     <animateIconify>no</animateIconify>
@@ -84,14 +84,14 @@
   </mouse>
 
   <applications>
-    <!-- Janelas normais do Browser (Camoufox / Firefox) maximizadas com decorações -->
+    <!-- Regular browser windows (Camoufox / Firefox) maximized with decorations -->
     <application type="normal">
       <focus>yes</focus>
       <maximized>yes</maximized>
       <decor>yes</decor>
     </application>
 
-    <!-- Caixas de diálogo não maximizadas -->
+    <!-- Non-maximized dialog boxes -->
     <application type="dialog">
       <focus>yes</focus>
       <maximized>no</maximized>
@@ -99,7 +99,7 @@
       <center>yes</center>
     </application>
 
-    <!-- Menus, popups, toolbars e painéis de extensões sem decorações e sem maximização -->
+    <!-- Menus, popups, toolbars and extension panels without decorations and without maximization -->
     <application type="menu">
       <focus>yes</focus>
       <maximized>no</maximized>

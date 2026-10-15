@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Camoufox VNC</title>
-  <!-- Fallback sem JS: entra direto com autoconnect -->
+  <!-- Fallback without JS: direct entry with autoconnect -->
   <meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=true&amp;reconnect=true&amp;reconnect_delay=2000&amp;resize=scale">
   <script>
     (function () {
       var params = new URLSearchParams(window.location.search);
-      // Força entrada direta sem clique no "Conectar",
-      // mas respeita parâmetros explícitos se o utilizador os passar.
+      // Force direct entry without clicking "Connect",
+      // while respecting explicit user-supplied params.
       if (!params.has('autoconnect')) params.set('autoconnect', 'true');
       if (!params.has('reconnect')) params.set('reconnect', 'true');
       if (!params.has('reconnect_delay')) params.set('reconnect_delay', '2000');
@@ -26,6 +26,6 @@
   </style>
 </head>
 <body>
-  <p>A ligar ao Camoufox… <a href="vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000&resize=scale">clica aqui se não fores redirecionado</a>.</p>
+  <p>Connecting to Camoufox… <a href="vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000&resize=scale">click here if you are not redirected</a>.</p>
 </body>
 </html>

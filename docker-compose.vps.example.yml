@@ -1,14 +1,14 @@
 # ============================================================
-#  Camoufox VNC - Docker Compose de Produção / VPS
-#  Usa este ficheiro para colocar o Camoufox a correr numa VPS
+#  Camoufox VNC - Production / VPS Docker Compose
+#  Use this file to run Camoufox on a VPS
 # ============================================================
 #
-#  Como usar na VPS:
-#    1. Cria uma pasta na VPS: mkdir -p ~/camoufox && cd ~/camoufox
-#    2. Copia este ficheiro como docker-compose.yml
-#    3. Inicia o serviço (imagem pública no Docker Hub, sem login):
+#  How to use on the VPS:
+#    1. Create a folder on the VPS: mkdir -p ~/camoufox && cd ~/camoufox
+#    2. Copy this file as docker-compose.yml
+#    3. Start the service (public image, no login required):
 #       docker compose up -d
-#    4. Acede no teu browser a: http://IP_DA_TUA_VPS:5800
+#    4. Open in your browser: http://YOUR_VPS_IP:5800
 # ============================================================
 
 services:
@@ -18,9 +18,9 @@ services:
     restart: unless-stopped
 
     ports:
-      - "5800:5800"      # Interface Web noVNC (http://IP_DA_VPS:5800)
-      - "5900:5900"      # Acesso direto VNC (opcional)
-      - "9377:9377"      # API MCP Stealth Bridge para AGY / OpenCode / Cursor
+      - "5800:5800"      # noVNC Web UI (http://VPS_IP:5800)
+      - "5900:5900"      # Direct VNC access (optional)
+      - "9377:9377"      # MCP Stealth Bridge API for agents
 
     environment:
       - TZ=Europe/Lisbon
@@ -30,13 +30,13 @@ services:
       - START_URL=https://duckduckgo.com
       - AUTO_UPDATE=true
       - ENABLE_CACHE=true
-      # Palavra-passe de acesso ao noVNC na VPS (RECOMENDADO definir para segurança):
-      - VNC_PASSWORD=muda_esta_palavra_passe_segura
+      # noVNC access password on the VPS (RECOMMENDED for security):
+      - VNC_PASSWORD=change_this_secure_password
 
     volumes:
-      # Persistência permanente de logins, cookies e histórico
+      # Permanent persistence of logins, cookies and history
       - camoufox_profile:/root/profile
-      # Pasta local na VPS onde caem os ficheiros descarregados
+      # Local folder on the VPS where downloaded files land
       - ./downloads:/data/downloads:rw
 
     shm_size: "2gb"

@@ -65,7 +65,7 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health' or self.path == '/':
             return self._send_json(status_cache)
-        self._send_json({"error": "Endpoint não encontrado"}, 404)
+        self._send_json({"error": "Endpoint not found"}, 404)
 
     def do_POST(self):
         data = self._read_body()
@@ -80,12 +80,12 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
             status_code = result_holder.get("http_status", 200)
             return self._send_json(result_holder.get("payload", {}), status_code)
         else:
-            return self._send_json({"error": "Timeout a executar comando no browser"}, 504)
+            return self._send_json({"error": "Browser command timed out"}, 504)
 
 def start_api_server(port=9377):
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(('0.0.0.0', port), CamoufoxAPIHandler)
-    print(f"[Camoufox API] Servidor de controlo HTTP/MCP ativo na porta {port}", flush=True)
+    print(f"[Camoufox API] HTTP/MCP control server listening on port {port}", flush=True)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     return server
@@ -117,9 +117,9 @@ def fix_search_policies():
             }
             with open(pfile, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            print(f"[Camoufox Config] Motor de pesquisa DuckDuckGo configurado em: {pfile}", flush=True)
+            print(f"[Camoufox Config] DuckDuckGo search engine configured at: {pfile}", flush=True)
         except Exception as e:
-            print(f"[Camoufox Config Warning] Aviso ao configurar policies.json: {e}", flush=True)
+            print(f"[Camoufox Config Warning] Failed to configure policies.json: {e}", flush=True)
 
 def cleanup_profile_locks(profile_dir):
     try:
@@ -136,11 +136,11 @@ def cleanup_profile_locks(profile_dir):
                 try:
                     if os.path.exists(lock_file) or os.path.islink(lock_file):
                         os.remove(lock_file)
-                        print(f"[Camoufox] Lock antigo removido: {lock_file}", flush=True)
+                        print(f"[Camoufox] Removed stale lock: {lock_file}", flush=True)
                 except Exception:
                     pass
     except Exception as e:
-        print(f"[Camoufox] Aviso ao limpar locks: {e}", flush=True)
+        print(f"[Camoufox] Warning while cleaning locks: {e}", flush=True)
 
 def main():
     global status_cache
@@ -154,12 +154,12 @@ def main():
     enable_cache = get_env_bool("ENABLE_CACHE", True)
     api_port = int(os.getenv("PORT_API", "9377"))
     
-    print(f"[Camoufox Stealth Engine] A iniciar Camoufox com perfil em: {profile_dir}", flush=True)
-    print(f"[Camoufox Stealth Engine] Emulação SO: {os_spoof}", flush=True)
+    print(f"[Camoufox Stealth Engine] Starting Camoufox with profile at: {profile_dir}", flush=True)
+    print(f"[Camoufox Stealth Engine] OS emulation: {os_spoof}", flush=True)
 
     start_api_server(port=api_port)
 
-    # Assegurar políticas corporativas com suporte a Containers
+    # Enforce enterprise policies with Containers support
     try:
         import glob
         for p in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json", recursive=True):
@@ -177,9 +177,9 @@ def main():
             except Exception:
                 pass
     except Exception as e:
-        print(f"[Camoufox] Aviso ao atualizar policies.json: {e}", flush=True)
+        print(f"[Camoufox] Warning while updating policies.json: {e}", flush=True)
 
-    # Preferências do Firefox para DuckDuckGo e Multi-Account Containers
+    # Firefox preferences for DuckDuckGo and Multi-Account Containers
     firefox_prefs = {
         "browser.startup.homepage": "https://duckduckgo.com",
         "browser.startup.page": 1,
@@ -195,7 +195,7 @@ def main():
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
-        # Prevenção de ecrãs de restauro e prompts que bloqueiam o input do utilizador
+        # Prevent session-restore screens and prompts that block user input
         "browser.sessionstore.resume_from_crash": False,
         "browser.sessionstore.max_resumed_crashes": 0,
         "toolkit.startup.max_resumed_crashes": -1,
@@ -204,7 +204,7 @@ def main():
         "browser.warnOnQuit": False,
     }
 
-    # Gravar user.js diretamente no diretório do perfil para persistência imediata
+    # Write user.js directly into the profile directory for immediate persistence
     try:
         os.makedirs(profile_dir, exist_ok=True)
         user_js_path = os.path.join(profile_dir, "user.js")
@@ -219,9 +219,9 @@ def main():
             user_js_lines.append(f'user_pref("{k}", {val_str});')
         with open(user_js_path, "w", encoding="utf-8") as f:
             f.write("\n".join(user_js_lines) + "\n")
-        print(f"[Camoufox Stealth Engine] user.js configurado com sucesso no perfil.", flush=True)
+        print(f"[Camoufox Stealth Engine] user.js successfully written to the profile.", flush=True)
 
-        # Assegurar containers.json inicializado
+        # Ensure containers.json is initialized
         containers_path = os.path.join(profile_dir, "containers.json")
         if not os.path.exists(containers_path) or os.path.getsize(containers_path) < 20:
             default_containers = {
@@ -237,9 +237,9 @@ def main():
             }
             with open(containers_path, "w", encoding="utf-8") as f:
                 json.dump(default_containers, f, indent=2)
-            print(f"[Camoufox Stealth Engine] containers.json inicializado com 4 categorias padrão.", flush=True)
+            print(f"[Camoufox Stealth Engine] containers.json initialized with 4 default categories.", flush=True)
     except Exception as e:
-        print(f"[Camoufox Stealth Engine] Aviso ao escrever user.js / containers.json: {e}", flush=True)
+        print(f"[Camoufox Stealth Engine] Warning while writing user.js / containers.json: {e}", flush=True)
 
     proxy_server = os.getenv("PROXY_SERVER", "").strip()
     proxy_config = None
@@ -250,7 +250,7 @@ def main():
         if proxy_user:
             proxy_config["username"] = proxy_user
             proxy_config["password"] = proxy_pass
-        print(f"[Camoufox Stealth Engine] A usar Proxy: {proxy_server}", flush=True)
+        print(f"[Camoufox Stealth Engine] Using proxy: {proxy_server}", flush=True)
 
     camoufox_kwargs = {
         "headless": False,
@@ -270,7 +270,7 @@ def main():
 
     def handle_sigterm(signum, frame):
         nonlocal running
-        print("[Camoufox] Sinal de encerramento recebido. A fechar...", flush=True)
+        print("[Camoufox] Shutdown signal received. Closing...", flush=True)
         running = False
         sys.exit(0)
 
@@ -279,7 +279,7 @@ def main():
 
     try:
         status_cache["status"] = "starting"
-        # Iniciar Camoufox com motor C++ Stealth
+        # Start Camoufox with the C++ stealth engine
         with Camoufox(**camoufox_kwargs) as browser:
             page = browser.pages[0] if browser.pages else browser.new_page()
             active_tab_index = 0
@@ -294,11 +294,11 @@ def main():
                     status_cache["url"] = page.url
                     status_cache["title"] = safe_get_title(page)
                 except Exception as e:
-                    print(f"[Camoufox] Aviso ao abrir URL inicial: {e}", flush=True)
+                    print(f"[Camoufox] Warning while opening the start URL: {e}", flush=True)
 
-            print("[Camoufox Stealth Engine] Browser 100% ativo com score de bot mínimo (0-3)!", flush=True)
+            print("[Camoufox Stealth Engine] Browser fully active with minimal bot score (0-3)!", flush=True)
 
-            # Assegurar foco de janela e reset de modificadores de teclado no X11
+            # Ensure window focus and reset X11 keyboard modifiers
             def ensure_window_focus():
                 time.sleep(1.0)
                 try:
@@ -308,7 +308,7 @@ def main():
                     pass
             threading.Thread(target=ensure_window_focus, daemon=True).start()
 
-            # Verificação 100% fiável do processo principal Camoufox em /proc
+            # Fully reliable check of the main Camoufox process via /proc
             def is_browser_process_alive():
                 try:
                     import glob
@@ -324,9 +324,9 @@ def main():
                     pass
                 return False
 
-            # Watchdog independente para deteção instantânea de fecho da janela/processo pelo utilizador
+            # Standalone watchdog for instant detection of window/process close by the user
             def browser_watchdog():
-                # Esperar até que o browser arranque inicialmente
+                # Wait until the browser has initially started
                 for _ in range(30):
                     time.sleep(0.5)
                     if is_browser_process_alive():
@@ -337,8 +337,8 @@ def main():
                     time.sleep(0.5)
                     if not is_browser_process_alive():
                         consecutive_dead += 1
-                        if consecutive_dead >= 2:  # 1 segundo consecutivo sem processo principal
-                            print("[Camoufox Watchdog] Processo principal do Camoufox fechado pelo utilizador. A reiniciar...", flush=True)
+                        if consecutive_dead >= 2:  # 1 consecutive second without the main process
+                            print("[Camoufox Watchdog] Main Camoufox process closed by the user. Restarting...", flush=True)
                             os.system("pkill -9 -f 'camoufox-bin' 2>/dev/null || true")
                             cleanup_profile_locks(profile_dir)
                             os._exit(0)
@@ -356,7 +356,7 @@ def main():
                 except queue.Empty:
                     continue
 
-                # Garantir página ativa válida para o comando
+                # Ensure a valid active page for the command
                 try:
                     active_pages = [p for p in browser.pages if not p.is_closed()]
                     if not active_pages:
@@ -374,7 +374,7 @@ def main():
                         target_url = data.get('url')
                         if not target_url:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'url' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'url' is required"}
                         else:
                             if not target_url.startswith("http://") and not target_url.startswith("https://"):
                                 target_url = "https://" + target_url
@@ -413,7 +413,7 @@ def main():
                         selector = data.get('selector')
                         if not selector:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'selector' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'selector' is required"}
                         else:
                             curr_page.click(selector, timeout=10000)
                             page_title = safe_get_title(curr_page)
@@ -428,7 +428,7 @@ def main():
                         text_val = data.get('text', '')
                         if not selector:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'selector' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'selector' is required"}
                         else:
                             if data.get('clear', True):
                                 curr_page.fill(selector, "")
@@ -443,7 +443,7 @@ def main():
 
                         if not selector:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'selector' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'selector' is required"}
                         else:
                             upload_target = None
                             if base64_data:
@@ -463,7 +463,7 @@ def main():
 
                             if not upload_target:
                                 result_holder["http_status"] = 400
-                                result_holder["payload"] = {"error": "É necessário fornecer 'file_path' ou 'base64_data'"}
+                                result_holder["payload"] = {"error": "'file_path' or 'base64_data' is required"}
                             else:
                                 curr_page.set_input_files(selector, upload_target)
                                 result_holder["payload"] = {
@@ -476,7 +476,7 @@ def main():
                         key = data.get('key')
                         if not key:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'key' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'key' is required"}
                         else:
                             curr_page.keyboard.press(key)
                             result_holder["payload"] = {"status": "ok"}
@@ -502,7 +502,7 @@ def main():
                         script = data.get('script')
                         if not script:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parâmetro 'script' é obrigatório"}
+                            result_holder["payload"] = {"error": "Parameter 'script' is required"}
                         else:
                             res = curr_page.evaluate(script)
                             result_holder["payload"] = {"status": "ok", "result": res}
@@ -548,11 +548,11 @@ def main():
                             }
                         else:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Índice de aba inválido"}
+                            result_holder["payload"] = {"error": "Invalid tab index"}
 
                     else:
                         result_holder["http_status"] = 404
-                        result_holder["payload"] = {"error": f"Endpoint '{endpoint}' desconhecido"}
+                        result_holder["payload"] = {"error": f"Unknown endpoint '{endpoint}'"}
 
                 except Exception as ex:
                     result_holder["http_status"] = 500
@@ -562,10 +562,10 @@ def main():
                     done_event.set()
 
     except Exception as err:
-        print(f"[Camoufox] Instância do browser fechada ou terminada: {err}", flush=True)
+        print(f"[Camoufox] Browser instance closed or terminated: {err}", flush=True)
     finally:
         status_cache["status"] = "restarting"
-        print("[Camoufox] Processo a terminar para reinício automático pelo supervisord...", flush=True)
+        print("[Camoufox] Exiting for automatic restart by supervisord...", flush=True)
         cleanup_profile_locks(profile_dir)
         time.sleep(0.5)
         sys.exit(0)
