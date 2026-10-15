@@ -74,8 +74,8 @@ COPY launch-camoufox.py /launch-camoufox.py
 COPY launch-x11vnc.sh /launch-x11vnc.sh
 RUN chmod +x /entrypoint.sh /launch-x11vnc.sh /launch-camoufox.py
 
-# Criar atalho para aceder diretamente ao noVNC na raiz (sem precisar de /vnc.html)
-RUN ln -s /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+# Redirecionamento automático para o noVNC (entra direto sem clicar em "Conectar")
+COPY novnc-index.html /usr/share/novnc/index.html
 
 EXPOSE 5800 5900 9377
 
