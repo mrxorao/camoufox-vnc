@@ -13,7 +13,7 @@
 
 services:
   camoufox:
-    image: mrxorao/camoufox-vnc:latest
+    image: xorao/camoufox-vnc:latest
     container_name: camoufox-vnc
     restart: unless-stopped
 
