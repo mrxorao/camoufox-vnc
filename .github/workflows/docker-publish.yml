@@ -1,8 +1,10 @@
 name: Build and Publish Docker Image
 
 on:
-  push:
-    branches: [ "main" ]
+  # Automatic runs on push are disabled: the image is published manually with
+  #   docker build -t xorao/camoufox-vnc:latest . && docker push xorao/camoufox-vnc:latest
+  # To re-enable CI publishing, add DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets
+  # and restore `push: branches: [ "main" ]` below.
   workflow_dispatch:
 
 env:
