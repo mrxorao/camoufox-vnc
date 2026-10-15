@@ -6,16 +6,14 @@
 #  Como usar na VPS:
 #    1. Cria uma pasta na VPS: mkdir -p ~/camoufox && cd ~/camoufox
 #    2. Copia este ficheiro como docker-compose.yml
-#    3. Se o repositório for privado, autentica a VPS no GHCR:
-#       echo $GITHUB_TOKEN | docker login ghcr.io -u mrxorao --password-stdin
-#    4. Inicia o serviço:
+#    3. Inicia o serviço (imagem pública no Docker Hub, sem login):
 #       docker compose up -d
-#    5. Acede no teu browser a: http://IP_DA_TUA_VPS:5800
+#    4. Acede no teu browser a: http://IP_DA_TUA_VPS:5800
 # ============================================================
 
 services:
   camoufox:
-    image: ghcr.io/mrxorao/camoufox-vnc:latest
+    image: mrxorao/camoufox-vnc:latest
     container_name: camoufox-vnc
     restart: unless-stopped
 
