@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: camoufox-vnc:latest
     container_name: camoufox-vnc
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "${PORT_WEB:-5800}:5800"      # noVNC Web UI (http://localhost:5800)
       - "${PORT_VNC:-5900}:5900"      # Direct VNC access (localhost:5900)

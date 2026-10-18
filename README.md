@@ -98,7 +98,8 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_press_key(key)` | Press keyboard keys (`Enter`, `Tab`, `Escape`, etc.). |
 | `browse_scroll(direction, amount)` | Scroll the page down or up. |
 | `browse_screenshot()` | Capture a high-resolution PNG screenshot of the browser screen. |
-| `browse_new_tab(url)` | Open a new tab in the browser. |
+| `browse_new_tab(url)` | Open a new tab in the browser (single-window mode enforced). |
+| `browse_close_tab(index)` | Close a tab by index (or active tab if omitted). |
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |

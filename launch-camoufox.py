@@ -115,9 +115,15 @@ def fix_search_policies():
                     }
                 ]
             }
+            # Enforce single-window / tab-only policy (never open new OS windows, force everything to tabs)
+            data["policies"].setdefault("Preferences", {})
+            data["policies"]["Preferences"]["browser.link.open_newwindow"] = {"Value": 3, "Status": "locked"}
+            data["policies"]["Preferences"]["browser.link.open_newwindow.restriction"] = {"Value": 0, "Status": "locked"}
+            data["policies"]["Preferences"]["browser.link.open_newwindow.override.external"] = {"Value": 3, "Status": "locked"}
+            data["policies"]["Preferences"]["browser.tabs.closeWindowWithLastTab"] = {"Value": False, "Status": "locked"}
             with open(pfile, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            print(f"[Camoufox Config] DuckDuckGo search engine configured at: {pfile}", flush=True)
+            print(f"[Camoufox Config] Policies and single-window rules configured at: {pfile}", flush=True)
         except Exception as e:
             print(f"[Camoufox Config Warning] Failed to configure policies.json: {e}", flush=True)
 
@@ -195,6 +201,20 @@ def main():
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
+        # Force all links, popups and windows into tabs in the existing window (Single Window Mode)
+        "browser.link.open_newwindow": 3,
+        "browser.link.open_newwindow.restriction": 0,
+        "browser.link.open_newwindow.override.external": 3,
+        "browser.tabs.closeWindowWithLastTab": False,
+        "dom.disable_window_open_feature.close": True,
+        "dom.disable_window_open_feature.location": True,
+        "dom.disable_window_open_feature.menubar": True,
+        "dom.disable_window_open_feature.minimizable": True,
+        "dom.disable_window_open_feature.personalbar": True,
+        "dom.disable_window_open_feature.resizable": True,
+        "dom.disable_window_open_feature.status": True,
+        "dom.disable_window_open_feature.titlebar": True,
+        "dom.disable_window_open_feature.toolbar": True,
         # Prevent session-restore screens and prompts that block user input
         "browser.sessionstore.resume_from_crash": False,
         "browser.sessionstore.max_resumed_crashes": 0,
@@ -478,6 +498,9 @@ def main():
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'key' is required"}
                         else:
+                            # Prevent opening new windows via shortcut; remap to new tab
+                            if key in ("Control+n", "Control+N", "Ctrl+n", "Ctrl+N"):
+                                key = "Control+t"
                             curr_page.keyboard.press(key)
                             result_holder["payload"] = {"status": "ok"}
 
@@ -515,40 +538,119 @@ def main():
                                 new_p.goto(url_t, wait_until="commit", timeout=15000)
                             except Exception:
                                 pass
-                        active_tab_index = len(browser.pages) - 1
+                        active_pages = [p for p in browser.pages if not p.is_closed()]
+                        active_tab_index = len(active_pages) - 1
+                        new_p.bring_to_front()
+                        page_title = safe_get_title(new_p)
+                        status_cache["url"] = new_p.url
+                        status_cache["title"] = page_title
+                        status_cache["tabs_count"] = len(active_pages)
                         result_holder["payload"] = {
                             "status": "ok",
                             "tab_index": active_tab_index,
                             "url": new_p.url,
-                            "title": safe_get_title(new_p)
+                            "title": page_title
                         }
 
+                    elif endpoint == '/close_tab':
+                        active_pages = [p for p in browser.pages if not p.is_closed()]
+                        raw_idx = data.get('index')
+                        if raw_idx is not None:
+                            try:
+                                target_idx = int(raw_idx)
+                            except (ValueError, TypeError):
+                                target_idx = active_tab_index
+                        else:
+                            target_idx = active_tab_index
+
+                        if not (0 <= target_idx < len(active_pages)):
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {
+                                "error": f"Invalid tab index: {target_idx}. Open tabs: 0 to {len(active_pages) - 1}"
+                            }
+                        else:
+                            target_page = active_pages[target_idx]
+
+                            # If closing the only tab, open a fresh start tab first so the window never closes/crashes
+                            if len(active_pages) <= 1:
+                                new_p = browser.new_page()
+                                try:
+                                    new_p.goto(start_url, wait_until="commit", timeout=15000)
+                                except Exception:
+                                    pass
+                                try:
+                                    target_page.close()
+                                except Exception:
+                                    pass
+                                active_pages = [p for p in browser.pages if not p.is_closed()]
+                                active_tab_index = 0
+                                curr_page = active_pages[0]
+                                curr_page.bring_to_front()
+                            else:
+                                try:
+                                    target_page.close()
+                                except Exception as close_err:
+                                    print(f"[Camoufox Close Tab Error]: {close_err}", flush=True)
+
+                                active_pages = [p for p in browser.pages if not p.is_closed()]
+                                if target_idx < active_tab_index:
+                                    active_tab_index -= 1
+                                elif target_idx == active_tab_index:
+                                    active_tab_index = min(target_idx, len(active_pages) - 1)
+
+                                if active_tab_index < 0:
+                                    active_tab_index = 0
+
+                                curr_page = active_pages[active_tab_index]
+                                curr_page.bring_to_front()
+
+                            page_title = safe_get_title(curr_page)
+                            status_cache["url"] = curr_page.url
+                            status_cache["title"] = page_title
+                            status_cache["tabs_count"] = len(active_pages)
+
+                            result_holder["payload"] = {
+                                "status": "ok",
+                                "closed_index": target_idx,
+                                "active_index": active_tab_index,
+                                "remaining_tabs_count": len(active_pages),
+                                "url": curr_page.url,
+                                "title": page_title
+                            }
+
                     elif endpoint == '/tabs':
+                        active_pages = [p for p in browser.pages if not p.is_closed()]
                         tabs_list = []
-                        for idx, p in enumerate(browser.pages):
+                        for idx, p in enumerate(active_pages):
                             tabs_list.append({
                                 "index": idx,
                                 "url": p.url,
                                 "title": safe_get_title(p),
                                 "is_active": idx == active_tab_index
                             })
-                        result_holder["payload"] = {"status": "ok", "tabs": tabs_list}
+                        result_holder["payload"] = {"status": "ok", "tabs": tabs_list, "count": len(tabs_list)}
 
                     elif endpoint == '/switch_tab':
                         idx = int(data.get('index', 0))
-                        if 0 <= idx < len(browser.pages):
+                        active_pages = [p for p in browser.pages if not p.is_closed()]
+                        if 0 <= idx < len(active_pages):
                             active_tab_index = idx
-                            p = browser.pages[idx]
+                            p = active_pages[idx]
                             p.bring_to_front()
+                            page_title = safe_get_title(p)
+                            status_cache["url"] = p.url
+                            status_cache["title"] = page_title
                             result_holder["payload"] = {
                                 "status": "ok",
                                 "active_index": idx,
                                 "url": p.url,
-                                "title": safe_get_title(p)
+                                "title": page_title
                             }
                         else:
                             result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Invalid tab index"}
+                            result_holder["payload"] = {
+                                "error": f"Invalid tab index: {idx}. Open tabs: 0 to {len(active_pages) - 1}"
+                            }
 
                     else:
                         result_holder["http_status"] = 404

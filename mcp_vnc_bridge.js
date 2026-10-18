@@ -153,11 +153,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_new_tab",
-        description: "Open a new tab in the Docker VNC browser.",
+        description: "Open a new tab in the existing browser window (new OS windows are restricted).",
         inputSchema: {
           type: "object",
           properties: {
-            url: { type: "string", description: "New tab URL (e.g. 'https://google.com')" },
+            url: { type: "string", description: "New tab URL (e.g. 'https://duckduckgo.com')" },
+          },
+        },
+      },
+      {
+        name: "browse_close_tab",
+        description: "Close a tab in the Docker VNC browser by its numeric index (or the currently active tab if omitted).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            index: {
+              type: "number",
+              description: "Numeric index of the tab to close (0, 1, 2...). If omitted, closes the currently active tab.",
+            },
           },
         },
       },
@@ -317,12 +330,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "browse_new_tab") {
-      const res = await sendCmd("/new_tab", { url: args?.url || "https://google.com" });
+      const res = await sendCmd("/new_tab", { url: args?.url || "https://duckduckgo.com" });
       if (res.error) {
         return { isError: true, content: [{ type: "text", text: `Failed to open tab: ${res.error}` }] };
       }
       return {
         content: [{ type: "text", text: `📄 New tab opened (index ${res.tab_index}): ${res.url}` }],
+      };
+    }
+
+    if (name === "browse_close_tab") {
+      const payload = {};
+      if (args?.index !== undefined && args?.index !== null) {
+        payload.index = Number(args.index);
+      }
+      const res = await sendCmd("/close_tab", payload);
+      if (res.error) {
+        return { isError: true, content: [{ type: "text", text: `Failed to close tab: ${res.error}` }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `🗑️ Tab ${res.closed_index !== undefined ? res.closed_index : ""} closed. Active tab is now index ${res.active_index}: ${res.url} (${res.title}) [${res.remaining_tabs_count} tab(s) open]`,
+          },
+        ],
       };
     }
 
