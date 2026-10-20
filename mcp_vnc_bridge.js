@@ -52,18 +52,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "browse",
-        description: "Navigate to a URL in the Docker VNC browser. Visible live in noVNC (http://localhost:5800).",
+        description: "Navigate to a URL in the Docker VNC browser. By default navigates the current tab; set new_tab: true to open in a new tab inside the existing window (strictly single-window, no new OS windows are ever opened). Visible live in noVNC (http://localhost:5800).",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "Target URL (e.g. 'https://example.com')" },
+            new_tab: { type: "boolean", description: "If true, opens the URL in a new tab inside the current window instead of replacing the active tab." },
           },
           required: ["url"],
         },
       },
       {
         name: "browse_navigate",
-        description: "Navigate to a specific URL inside the VNC browser.",
+        description: "Navigate the active tab to a specific URL inside the VNC browser.",
         inputSchema: {
           type: "object",
           properties: {
@@ -153,7 +154,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_new_tab",
-        description: "Open a new tab in the existing browser window (new OS windows are restricted).",
+        description: "Open a URL in a new tab inside the existing browser window (strictly single-window mode; never opens separate OS windows).",
         inputSchema: {
           type: "object",
           properties: {
@@ -198,7 +199,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
-    if (name === "browse" || name === "browse_navigate") {
+    if (name === "browse") {
+      let targetUrl = args?.url || "";
+      if (args?.new_tab) {
+        const res = await sendCmd("/new_tab", { url: targetUrl });
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to open in new tab: ${res.error}` }] };
+        }
+        const snap = await sendCmd("/snapshot");
+        const pageText = snap.text || "";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `🌐 [Docker noVNC] Opened in new tab (index ${res.tab_index}): ${res.url}\nTitle: ${res.title}\n\nContent summary:\n${pageText.slice(0, 4000)}`,
+            },
+          ],
+        };
+      } else {
+        const res = await sendCmd("/navigate", { url: targetUrl });
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
+        }
+        const snap = await sendCmd("/snapshot");
+        const pageText = snap.text || "";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `🌐 [Docker noVNC] Successfully navigated to: ${res.url}\nTitle: ${res.title}\n\nContent summary:\n${pageText.slice(0, 4000)}`,
+            },
+          ],
+        };
+      }
+    }
+
+    if (name === "browse_navigate") {
       let targetUrl = args?.url || "";
       const res = await sendCmd("/navigate", { url: targetUrl });
       if (res.error) {
@@ -335,7 +371,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { isError: true, content: [{ type: "text", text: `Failed to open tab: ${res.error}` }] };
       }
       return {
-        content: [{ type: "text", text: `📄 New tab opened (index ${res.tab_index}): ${res.url}` }],
+        content: [{ type: "text", text: `📄 New tab opened in existing window (index ${res.tab_index}): ${res.url}` }],
       };
     }
 

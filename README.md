@@ -89,8 +89,8 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 
 | Tool | Description |
 |---|---|
-| `browse(url)` | Navigate to a URL and extract a summary of the page content. |
-| `browse_navigate(url)` | Direct navigation to a specific URL. |
+| `browse(url, new_tab)` | Navigate to a URL in the active tab (or open in a new tab inside the same window if `new_tab: true`) and extract a summary. |
+| `browse_navigate(url)` | Direct navigation in the currently active tab. |
 | `browse_snapshot()` | Get the visible text of the current page without reloading. |
 | `browse_click(selector)` | Click a button, link or interactive element via CSS selector. |
 | `browse_type(selector, text)` | Type text into form fields and inputs. |
@@ -98,7 +98,7 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_press_key(key)` | Press keyboard keys (`Enter`, `Tab`, `Escape`, etc.). |
 | `browse_scroll(direction, amount)` | Scroll the page down or up. |
 | `browse_screenshot()` | Capture a high-resolution PNG screenshot of the browser screen. |
-| `browse_new_tab(url)` | Open a new tab in the browser (single-window mode enforced). |
+| `browse_new_tab(url)` | Open a new tab inside the existing window (strictly single-window mode enforced; never opens new OS windows). |
 | `browse_close_tab(index)` | Close a tab by index (or active tab if omitted). |
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |

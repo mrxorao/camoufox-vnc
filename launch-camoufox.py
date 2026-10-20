@@ -96,6 +96,51 @@ def safe_get_title(page):
     except Exception:
         return ""
 
+def create_new_tab(browser, current_page, target_url="https://duckduckgo.com"):
+    """
+    Opens a new TAB in the existing Firefox window instead of creating
+    a new OS window (which browser.new_page() would do in Firefox).
+    """
+    if not target_url or target_url == "about:blank":
+        target_url = "https://duckduckgo.com"
+    elif not target_url.startswith("http://") and not target_url.startswith("https://") and not target_url.startswith("about:"):
+        target_url = "https://" + target_url
+
+    # 1. Primary method: Evaluate window.open in the active page.
+    # Because browser.link.open_newwindow=3 and restriction=0, Firefox strictly forces this into a TAB in the existing window.
+    if current_page and not current_page.is_closed():
+        try:
+            with browser.expect_page(timeout=5000) as p_info:
+                current_page.evaluate("(u) => { window.open(u, '_blank'); }", target_url)
+            new_p = p_info.value
+            return new_p
+        except Exception as e_eval:
+            print(f"[Camoufox Tab] window.open failed ({e_eval}), falling back to xdotool Ctrl+T...", flush=True)
+
+    # 2. Secondary method: Send Ctrl+T via xdotool directly to the X11 display
+    # This natively tells the Firefox UI to open a new tab in the current window.
+    try:
+        with browser.expect_page(timeout=5000) as p_info:
+            os.system("xdotool key --clearmodifiers ctrl+t 2>/dev/null || true")
+        new_p = p_info.value
+        if target_url and target_url != "about:blank":
+            try:
+                new_p.goto(target_url, wait_until="commit", timeout=15000)
+            except Exception:
+                pass
+        return new_p
+    except Exception as e_xdo:
+        print(f"[Camoufox Tab] xdotool Ctrl+T failed ({e_xdo}), falling back to browser.new_page()...", flush=True)
+
+    # 3. Final fallback: If no pages or windows exist at all
+    new_p = browser.new_page()
+    if target_url and target_url != "about:blank":
+        try:
+            new_p.goto(target_url, wait_until="commit", timeout=15000)
+        except Exception:
+            pass
+    return new_p
+
 def fix_search_policies():
     import glob
     for pfile in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json", recursive=True):
@@ -121,6 +166,7 @@ def fix_search_policies():
             data["policies"]["Preferences"]["browser.link.open_newwindow.restriction"] = {"Value": 0, "Status": "locked"}
             data["policies"]["Preferences"]["browser.link.open_newwindow.override.external"] = {"Value": 3, "Status": "locked"}
             data["policies"]["Preferences"]["browser.tabs.closeWindowWithLastTab"] = {"Value": False, "Status": "locked"}
+            data["policies"]["Preferences"]["browser.search.openintab"] = {"Value": True, "Status": "locked"}
             with open(pfile, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             print(f"[Camoufox Config] Policies and single-window rules configured at: {pfile}", flush=True)
@@ -201,11 +247,14 @@ def main():
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
-        # Force all links, popups and windows into tabs in the existing window (Single Window Mode)
+        # Force all links, popups and windows into tabs in the existing window (Strict Single-Window Mode)
         "browser.link.open_newwindow": 3,
         "browser.link.open_newwindow.restriction": 0,
         "browser.link.open_newwindow.override.external": 3,
         "browser.tabs.closeWindowWithLastTab": False,
+        "browser.tabs.loadBookmarksInTabs": True,
+        "browser.search.openintab": True,
+        "privacy.popups.policy": 1,
         "dom.disable_window_open_feature.close": True,
         "dom.disable_window_open_feature.location": True,
         "dom.disable_window_open_feature.menubar": True,
@@ -498,11 +547,45 @@ def main():
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'key' is required"}
                         else:
-                            # Prevent opening new windows via shortcut; remap to new tab
-                            if key in ("Control+n", "Control+N", "Ctrl+n", "Ctrl+N"):
-                                key = "Control+t"
-                            curr_page.keyboard.press(key)
-                            result_holder["payload"] = {"status": "ok"}
+                            # Intercept new tab and window shortcuts to open in a tab inside the same window
+                            if key in ("Control+n", "Control+N", "Ctrl+n", "Ctrl+N", "Control+t", "Control+T", "Ctrl+t", "Ctrl+T"):
+                                new_p = create_new_tab(browser, curr_page, start_url)
+                                active_pages = [p for p in browser.pages if not p.is_closed()]
+                                if new_p in active_pages:
+                                    active_tab_index = active_pages.index(new_p)
+                                else:
+                                    active_tab_index = len(active_pages) - 1
+                                curr_page = active_pages[active_tab_index]
+                                curr_page.bring_to_front()
+                                status_cache["url"] = curr_page.url
+                                status_cache["title"] = safe_get_title(curr_page)
+                                status_cache["tabs_count"] = len(active_pages)
+                                result_holder["payload"] = {"status": "ok", "action": "new_tab", "tab_index": active_tab_index}
+                            elif key in ("Control+w", "Control+W", "Ctrl+w", "Ctrl+W"):
+                                active_pages = [p for p in browser.pages if not p.is_closed()]
+                                if len(active_pages) <= 1:
+                                    try:
+                                        curr_page.goto(start_url, wait_until="commit", timeout=15000)
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        curr_page.close()
+                                    except Exception:
+                                        pass
+                                    active_pages = [p for p in browser.pages if not p.is_closed()]
+                                    active_tab_index = min(active_tab_index, len(active_pages) - 1)
+                                    if active_tab_index < 0:
+                                        active_tab_index = 0
+                                    curr_page = active_pages[active_tab_index]
+                                    curr_page.bring_to_front()
+                                status_cache["url"] = curr_page.url
+                                status_cache["title"] = safe_get_title(curr_page)
+                                status_cache["tabs_count"] = len(active_pages)
+                                result_holder["payload"] = {"status": "ok", "action": "close_tab"}
+                            else:
+                                curr_page.keyboard.press(key)
+                                result_holder["payload"] = {"status": "ok"}
 
                     elif endpoint == '/scroll':
                         delta_y = int(data.get('delta_y', 500))
@@ -531,24 +614,23 @@ def main():
                             result_holder["payload"] = {"status": "ok", "result": res}
 
                     elif endpoint == '/new_tab':
-                        new_p = browser.new_page()
                         url_t = data.get('url', 'https://duckduckgo.com')
-                        if url_t and url_t != 'about:blank':
-                            try:
-                                new_p.goto(url_t, wait_until="commit", timeout=15000)
-                            except Exception:
-                                pass
+                        new_p = create_new_tab(browser, curr_page, url_t)
                         active_pages = [p for p in browser.pages if not p.is_closed()]
-                        active_tab_index = len(active_pages) - 1
-                        new_p.bring_to_front()
-                        page_title = safe_get_title(new_p)
-                        status_cache["url"] = new_p.url
+                        if new_p in active_pages:
+                            active_tab_index = active_pages.index(new_p)
+                        else:
+                            active_tab_index = len(active_pages) - 1
+                        curr_page = active_pages[active_tab_index]
+                        curr_page.bring_to_front()
+                        page_title = safe_get_title(curr_page)
+                        status_cache["url"] = curr_page.url
                         status_cache["title"] = page_title
                         status_cache["tabs_count"] = len(active_pages)
                         result_holder["payload"] = {
                             "status": "ok",
                             "tab_index": active_tab_index,
-                            "url": new_p.url,
+                            "url": curr_page.url,
                             "title": page_title
                         }
 
@@ -571,20 +653,14 @@ def main():
                         else:
                             target_page = active_pages[target_idx]
 
-                            # If closing the only tab, open a fresh start tab first so the window never closes/crashes
+                            # If closing the only tab, navigate it to start_url so the browser window stays intact without opening/closing windows
                             if len(active_pages) <= 1:
-                                new_p = browser.new_page()
                                 try:
-                                    new_p.goto(start_url, wait_until="commit", timeout=15000)
+                                    target_page.goto(start_url, wait_until="commit", timeout=15000)
                                 except Exception:
                                     pass
-                                try:
-                                    target_page.close()
-                                except Exception:
-                                    pass
-                                active_pages = [p for p in browser.pages if not p.is_closed()]
                                 active_tab_index = 0
-                                curr_page = active_pages[0]
+                                curr_page = target_page
                                 curr_page.bring_to_front()
                             else:
                                 try:

@@ -44,6 +44,7 @@ for p in glob.glob("/root/.cache/camoufox/browsers/**/distribution/policies.json
         d["policies"]["Preferences"]["browser.link.open_newwindow.restriction"] = {"Value": 0, "Status": "locked"}
         d["policies"]["Preferences"]["browser.link.open_newwindow.override.external"] = {"Value": 3, "Status": "locked"}
         d["policies"]["Preferences"]["browser.tabs.closeWindowWithLastTab"] = {"Value": False, "Status": "locked"}
+        d["policies"]["Preferences"]["browser.search.openintab"] = {"Value": True, "Status": "locked"}
         with open(p, "w") as f: json.dump(d, f, indent=2)
     except Exception: pass
 '
