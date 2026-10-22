@@ -459,8 +459,12 @@ async function runUltraFastLoop(goal, options = {}) {
 
     if (targets[selectedOp]) {
       const targetAns = answers[`${selectedOp.toLowerCase()}_target`];
-      targetIndex = targetAns?.choice;
+      targetIndex = targetAns?.choice ? String(targetAns.choice) : null;
       targetAction = targets[selectedOp][targetIndex];
+      if (!targetAction && targetIndex) {
+        const subKey = Object.keys(targets[selectedOp]).find((k) => k.startsWith(targetIndex + ":"));
+        if (subKey) targetAction = targets[selectedOp][subKey];
+      }
     } else if (controls[selectedOp]) {
       targetAction = controls[selectedOp];
     }
@@ -561,15 +565,22 @@ async function runUltraFastLoop(goal, options = {}) {
         if (rawTarget) {
           if (targets[selectedOp]?.[rawTarget]) {
             targetAction = targets[selectedOp][rawTarget];
-          } else if (targets.CLICK?.[rawTarget]) {
+          } else if (targets[selectedOp]) {
+            const subKey = Object.keys(targets[selectedOp]).find((k) => k.startsWith(rawTarget + ":"));
+            if (subKey) targetAction = targets[selectedOp][subKey];
+          }
+          if (!targetAction && targets.CLICK?.[rawTarget]) {
             targetAction = targets.CLICK[rawTarget];
             selectedOp = "CLICK";
-          } else if (targets.TYPE_TEXT?.[rawTarget]) {
+          } else if (!targetAction && targets.TYPE_TEXT?.[rawTarget]) {
             targetAction = targets.TYPE_TEXT[rawTarget];
             selectedOp = "TYPE_TEXT";
-          } else if (targets.SELECT?.[rawTarget]) {
-            targetAction = targets.SELECT[rawTarget];
-            selectedOp = "SELECT";
+          } else if (!targetAction && targets.SELECT) {
+            const subKey = Object.keys(targets.SELECT).find((k) => k.startsWith(rawTarget + ":"));
+            if (subKey) {
+              targetAction = targets.SELECT[subKey];
+              selectedOp = "SELECT";
+            }
           }
         }
 
