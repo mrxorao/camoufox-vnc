@@ -86,14 +86,14 @@ async function callJevDecisions(state, questions) {
 }
 
 function getJevChoice(response, questionKey) {
-  const q = response?.decisions?.[questionKey] || response?.[questionKey];
+  const q = response?.answers?.[questionKey] || response?.decisions?.[questionKey] || response?.[questionKey];
   if (!q) return null;
   if (typeof q === "string") return q;
   return q.choice || q.value || q.selected || null;
 }
 
 function getJevConfidence(response, questionKey) {
-  const q = response?.decisions?.[questionKey] || response?.[questionKey];
+  const q = response?.answers?.[questionKey] || response?.decisions?.[questionKey] || response?.[questionKey];
   if (!q) return null;
   return q.confidence !== undefined ? q.confidence : null;
 }
@@ -881,7 +881,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       );
 
-      const decisionData = jevRes?.decisions?.evaluation || jevRes?.evaluation || jevRes;
+      const decisionData = jevRes?.answers?.evaluation || jevRes?.decisions?.evaluation || jevRes?.evaluation || jevRes;
       return {
         content: [
           {
