@@ -92,7 +92,7 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse(url, new_tab)` | Navigate to a URL in the active tab (or open in a new tab inside the same window if `new_tab: true`) and extract a summary. |
 | `browse_navigate(url)` | Direct navigation in the currently active tab. |
 | `browse_snapshot()` | Get the visible text of the current page without reloading. |
-| `browse_click(selector)` | Click a button, link or interactive element via CSS selector. |
+| `browse_click(selector, x, y)` | Click an element by CSS selector OR exact $(x, y)$ coordinates with realistic human Bezier curve movement. |
 | `browse_type(selector, text)` | Type text into form fields and inputs. |
 | `browse_upload_file(selector, file_path)` | Upload files from your computer to the web page. |
 | `browse_press_key(key)` | Press keyboard keys (`Enter`, `Tab`, `Escape`, etc.). |
@@ -103,23 +103,28 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |
-| `browse_smart_click(intent)` | *(Optional, Jev 1.14)* Click an interactive element by natural language intent (e.g. `'accept cookies'`). |
-| `browse_smart_type(intent, text)` | *(Optional, Jev 1.14)* Type text into a form or search field by natural language intent (e.g. `'search bar'`). |
-| `browse_decide(question, type)` | *(Optional, Jev 1.14)* Evaluate a fast structured question about the active page (yes/no or choices) in ~150ms. |
+| `browse_ultrafast(goal, url, max_steps)` | *(Optional, Jev 1.14)* Autonomous Ultra-Fast multi-step web agent (inspired by `browser-use/jev-ultrafast`). Executes end-to-end tasks in seconds using indexed element tables and Jev decisions. |
 
 ---
 
-## ⚡ TypeSafe Jev 1.14 Autonomous Decisions (Optional)
+## ⚡ TypeSafe Jev 1.14 Ultra-Fast Autonomous Mode (Optional)
 
-You can optionally enable **TypeSafe Jev 1.14** (System-1 structured decision model via OpenRouter) for sub-second, ultra-cheap intent-based clicks and field typing without sending large DOM payloads to your primary AI agent:
+Inspired by [`browser-use/jev-ultrafast`](https://github.com/browser-use/jev-ultrafast), you can activate the **Ultra-Fast Autonomous Agent Mode** powered by **TypeSafe Jev 1.14** via OpenRouter. 
 
-1. In your `.env` file, configure:
-   ```bash
-   ENABLE_JEV=true
-   OPENROUTER_API_KEY=sk-or-v1-your-key-here
-   JEV_MODEL=typesafe/jev-1.14
-   ```
-2. When enabled, `browse_smart_click`, `browse_smart_type`, and `browse_decide` become available in the MCP server. When disabled (default), standard manual tools are used.
+Instead of waiting for slow multimodal LLMs to analyze heavy screenshots on every step, `browse_ultrafast` uses:
+1. **Indexed DOM Action Space:** Extracts all visible interactive controls atomically (`[1..N]`).
+2. **System-1 Fast Decisions:** Jev evaluates operations (`CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) in ~150ms.
+3. **Selective Text Generation:** Text generation is called strictly when typing is needed.
+4. **Humanized Trajectory:** Every action is executed with realistic mouse movement and full noVNC live observability.
+5. **System-2 Safe Fallback:** If blocked or if a CAPTCHA appears, the agent safely halts and hands over control with a complete diagnostic report for Normal Mode intervention.
+
+### Configuration (`.env`)
+```bash
+ENABLE_JEV=true
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+JEV_MODEL=typesafe/jev-1.14
+JEV_TEXT_MODEL=openai/gpt-4o-mini
+```
 
 ---
 
