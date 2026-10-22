@@ -38,7 +38,10 @@ function loadEnvFile() {
 }
 loadEnvFile();
 
-const CAMOUFOX_API_URL = process.env.CAMOUFOX_API_URL || "http://127.0.0.1:9377";
+const rawHost = process.env.CAMOUFOX_HOST || process.env.CAMOUFOX_API_URL || "http://127.0.0.1:9377";
+const CAMOUFOX_API_URL = rawHost.startsWith("http://") || rawHost.startsWith("https://")
+  ? rawHost.replace(/\/$/, "")
+  : `http://${rawHost.replace(/\/$/, "")}`;
 
 function getJevConfig() {
   loadEnvFile();
