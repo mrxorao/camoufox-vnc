@@ -103,6 +103,23 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |
+| `browse_smart_click(intent)` | *(Optional, Jev 1.14)* Click an interactive element by natural language intent (e.g. `'accept cookies'`). |
+| `browse_smart_type(intent, text)` | *(Optional, Jev 1.14)* Type text into a form or search field by natural language intent (e.g. `'search bar'`). |
+| `browse_decide(question, type)` | *(Optional, Jev 1.14)* Evaluate a fast structured question about the active page (yes/no or choices) in ~150ms. |
+
+---
+
+## ⚡ TypeSafe Jev 1.14 Autonomous Decisions (Optional)
+
+You can optionally enable **TypeSafe Jev 1.14** (System-1 structured decision model via OpenRouter) for sub-second, ultra-cheap intent-based clicks and field typing without sending large DOM payloads to your primary AI agent:
+
+1. In your `.env` file, configure:
+   ```bash
+   ENABLE_JEV=true
+   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+   JEV_MODEL=typesafe/jev-1.14
+   ```
+2. When enabled, `browse_smart_click`, `browse_smart_type`, and `browse_decide` become available in the MCP server. When disabled (default), standard manual tools are used.
 
 ---
 
@@ -120,6 +137,9 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `AUTO_UPDATE` | Auto-update Camoufox on boot | `true` |
 | `START_URL` | Page opened on startup | `https://duckduckgo.com` |
 | `VNC_PASSWORD` | VNC access password (optional) | *(empty)* |
+| `ENABLE_JEV` | Enable TypeSafe Jev 1.14 decision tools (`true`/`false`) | `false` |
+| `OPENROUTER_API_KEY` | OpenRouter API Key for Jev decisions | *(empty)* |
+| `JEV_MODEL` | Jev decision model identifier | `typesafe/jev-1.14` |
 
 ---
 

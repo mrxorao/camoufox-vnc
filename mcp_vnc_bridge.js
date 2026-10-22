@@ -14,7 +14,190 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+function loadEnvFile() {
+  try {
+    const envPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), ".env");
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf-8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx !== -1) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed.slice(eqIdx + 1).trim();
+          if (process.env[key] === undefined) {
+            process.env[key] = val;
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+loadEnvFile();
+
 const CAMOUFOX_API_URL = process.env.CAMOUFOX_API_URL || "http://127.0.0.1:9377";
+
+function getJevConfig() {
+  loadEnvFile();
+  const enableJev = (process.env.ENABLE_JEV || "false").trim().toLowerCase() === "true";
+  const apiKey = (process.env.OPENROUTER_API_KEY || "").trim();
+  const model = (process.env.JEV_MODEL || "typesafe/jev-1.14").trim();
+  return {
+    enableJev,
+    apiKey,
+    model,
+    isActive: enableJev && Boolean(apiKey),
+  };
+}
+
+async function callJevDecisions(state, questions) {
+  const { apiKey, model } = getJevConfig();
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not configured in .env or environment.");
+  }
+
+  const url = "https://openrouter.ai/api/alpha/decisions";
+  const payload = {
+    model,
+    state,
+    questions,
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://github.com/xorao/camoufox-vnc",
+      "X-Title": "Camoufox VNC Bridge",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenRouter Jev API returned ${res.status}: ${errText}`);
+  }
+
+  return await res.json();
+}
+
+function getJevChoice(response, questionKey) {
+  const q = response?.decisions?.[questionKey] || response?.[questionKey];
+  if (!q) return null;
+  if (typeof q === "string") return q;
+  return q.choice || q.value || q.selected || null;
+}
+
+function getJevConfidence(response, questionKey) {
+  const q = response?.decisions?.[questionKey] || response?.[questionKey];
+  if (!q) return null;
+  return q.confidence !== undefined ? q.confidence : null;
+}
+
+async function extractClickableElements() {
+  const script = `
+(() => {
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= window.innerHeight;
+  };
+
+  const candidates = Array.from(document.querySelectorAll(
+    'button, a, input[type="button"], input[type="submit"], [role="button"], [role="link"], [role="tab"], [tabindex]:not([tabindex="-1"])'
+  ));
+
+  let counter = 1;
+  const list = [];
+  for (const el of candidates) {
+    if (!isVisible(el)) continue;
+    const text = (
+      el.innerText ||
+      el.textContent ||
+      el.value ||
+      el.getAttribute('aria-label') ||
+      el.getAttribute('title') ||
+      ''
+    ).trim().replace(/\\s+/g, ' ');
+
+    if (!text && !el.id && !el.className) continue;
+
+    let marker = el.getAttribute('data-mcp-el');
+    if (!marker) {
+      marker = 'mcp-el-' + (counter++);
+      el.setAttribute('data-mcp-el', marker);
+    }
+
+    list.push({
+      id: marker,
+      tag: el.tagName.toLowerCase(),
+      text: text.slice(0, 120),
+      selector: '[data-mcp-el="' + marker + '"]'
+    });
+
+    if (list.length >= 35) break;
+  }
+  return list;
+})()
+`;
+  const res = await sendCmd("/evaluate", { script });
+  return Array.isArray(res?.result) ? res.result : [];
+}
+
+async function extractInputElements() {
+  const script = `
+(() => {
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  const candidates = Array.from(document.querySelectorAll(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]'
+  ));
+
+  let counter = 1;
+  const list = [];
+  for (const el of candidates) {
+    if (!isVisible(el)) continue;
+    const placeholder = el.getAttribute('placeholder') || '';
+    const name = el.getAttribute('name') || '';
+    const ariaLabel = el.getAttribute('aria-label') || '';
+    const title = el.getAttribute('title') || '';
+    const type = el.getAttribute('type') || 'text';
+
+    let marker = el.getAttribute('data-mcp-in');
+    if (!marker) {
+      marker = 'mcp-in-' + (counter++);
+      el.setAttribute('data-mcp-in', marker);
+    }
+
+    list.push({
+      id: marker,
+      type: type,
+      placeholder: placeholder.slice(0, 80),
+      name: name.slice(0, 80),
+      ariaLabel: (ariaLabel || title).slice(0, 80),
+      selector: '[data-mcp-in="' + marker + '"]'
+    });
+
+    if (list.length >= 25) break;
+  }
+  return list;
+})()
+`;
+  const res = await sendCmd("/evaluate", { script });
+  return Array.isArray(res?.result) ? res.result : [];
+}
 
 async function sendCmd(endpoint, data = null, method = "POST") {
   const url = `${CAMOUFOX_API_URL.replace(/\/$/, "")}${endpoint}`;
@@ -48,8 +231,7 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
+  const tools = [
       {
         name: "browse",
         description: "Navigate to a URL in the Docker VNC browser. By default navigates the current tab; set new_tab: true to open in a new tab inside the existing window (strictly single-window, no new OS windows are ever opened). Visible live in noVNC (http://localhost:5800).",
@@ -191,8 +373,74 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["index"],
         },
       },
-    ],
-  };
+  ];
+
+  const jev = getJevConfig();
+  if (jev.isActive) {
+    tools.push(
+      {
+        name: "browse_smart_click",
+        description: "OPTIONAL (Jev AI System-1): Click an interactive element (button, link, tab) matching an intent in natural language (e.g. 'accept cookies', 'proceed to checkout', 'search button'). Powered by TypeSafe Jev 1.14.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              description: "Natural language description of the target element to click (e.g. 'accept cookies', 'login button', 'shopping cart')",
+            },
+          },
+          required: ["intent"],
+        },
+      },
+      {
+        name: "browse_smart_type",
+        description: "OPTIONAL (Jev AI System-1): Type text into an input field or search bar matching an intent in natural language (e.g. 'search bar', 'email input'). Powered by TypeSafe Jev 1.14.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              description: "Natural language description of the input field (e.g. 'search field', 'username', 'coupon code')",
+            },
+            text: {
+              type: "string",
+              description: "Text to type into the field",
+            },
+            press_enter: {
+              type: "boolean",
+              description: "If true, press the Enter key immediately after typing (default: false)",
+            },
+          },
+          required: ["intent", "text"],
+        },
+      },
+      {
+        name: "browse_decide",
+        description: "OPTIONAL (Jev AI System-1): Ask a fast structured question about the active page (yes/no boolean or pick from options) evaluated in real-time by Jev 1.14 without returning large DOM text. Powered by TypeSafe Jev 1.14.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            question: {
+              type: "string",
+              description: "The question to evaluate against the current page state (e.g. 'Is there a captcha displayed on the page?')",
+            },
+            type: {
+              type: "string",
+              enum: ["noul", "choice"],
+              description: "Decision type: 'noul' (yes/no boolean probability) or 'choice' (choose from options). Default is 'noul'.",
+            },
+            options: {
+              type: "object",
+              description: "Map of option keys to criteria descriptions when type='choice' (e.g. {'logged_in': 'User dashboard visible', 'logged_out': 'Login form visible'}).",
+            },
+          },
+          required: ["question"],
+        },
+      }
+    );
+  }
+
+  return { tools };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -411,6 +659,236 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       return {
         content: [{ type: "text", text: `Active tab switched to index ${args.index}: ${res.url} (${res.title})` }],
+      };
+    }
+
+    if (name === "browse_smart_click") {
+      const jev = getJevConfig();
+      if (!jev.isActive) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "⚠️ 'browse_smart_click' requires Jev to be enabled. Set ENABLE_JEV=true and provide OPENROUTER_API_KEY in your .env file, or use the standard 'browse_click' with a CSS selector.",
+            },
+          ],
+        };
+      }
+
+      const elements = await extractClickableElements();
+      if (!elements || elements.length === 0) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "No visible clickable elements found in the current viewport." }],
+        };
+      }
+
+      const criteria = {};
+      for (const el of elements) {
+        criteria[el.id] = `<${el.tag}> with text: "${el.text}"`;
+      }
+      criteria["none"] = "None of the visible elements match the user intent.";
+
+      const jevRes = await callJevDecisions(
+        {
+          intent: args.intent,
+          elements: elements.map((e) => ({ id: e.id, tag: e.tag, text: e.text })),
+        },
+        {
+          target_element: {
+            type: "choice",
+            instructions: `Which element best matches the user intent: "${args.intent}"? If none matches, choose "none".`,
+            criteria,
+          },
+        }
+      );
+
+      const chosenId = getJevChoice(jevRes, "target_element");
+      const confidence = getJevConfidence(jevRes, "target_element");
+
+      if (!chosenId || chosenId === "none") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ℹ️ [Jev 1.14] Evaluated ${elements.length} clickable elements, but none matched the intent: "${args.intent}".`,
+            },
+          ],
+        };
+      }
+
+      const target = elements.find((e) => e.id === chosenId);
+      if (!target) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Jev chose element ID '${chosenId}', but it could not be resolved.` }],
+        };
+      }
+
+      const clickRes = await sendCmd("/click", { selector: target.selector });
+      if (clickRes.error) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Jev selected '${target.text}' (${target.selector}), but click failed: ${clickRes.error}` }],
+        };
+      }
+
+      const confText = confidence !== null ? ` (confidence: ${(confidence * 100).toFixed(1)}%)` : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `⚡ [Jev 1.14 Smart Click] Intent: "${args.intent}"\nClicked: <${target.tag}> "${target.text}" (${target.selector})${confText}\nCurrent URL: ${clickRes.url || ""} (${clickRes.title || ""})`,
+          },
+        ],
+      };
+    }
+
+    if (name === "browse_smart_type") {
+      const jev = getJevConfig();
+      if (!jev.isActive) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "⚠️ 'browse_smart_type' requires Jev to be enabled. Set ENABLE_JEV=true and provide OPENROUTER_API_KEY in your .env file, or use the standard 'browse_type' with a CSS selector.",
+            },
+          ],
+        };
+      }
+
+      const inputs = await extractInputElements();
+      if (!inputs || inputs.length === 0) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "No visible input fields or textareas found in the page." }],
+        };
+      }
+
+      const criteria = {};
+      for (const el of inputs) {
+        const desc = [
+          el.placeholder ? `placeholder="${el.placeholder}"` : "",
+          el.name ? `name="${el.name}"` : "",
+          el.ariaLabel ? `label="${el.ariaLabel}"` : "",
+          `type="${el.type}"`,
+        ].filter(Boolean).join(" ");
+        criteria[el.id] = desc || el.id;
+      }
+      criteria["none"] = "None of the inputs match the user intent.";
+
+      const jevRes = await callJevDecisions(
+        {
+          intent: args.intent,
+          inputs: inputs.map((e) => ({ id: e.id, placeholder: e.placeholder, name: e.name, label: e.ariaLabel })),
+        },
+        {
+          target_input: {
+            type: "choice",
+            instructions: `Which input field best matches the user intent: "${args.intent}"? If none matches, choose "none".`,
+            criteria,
+          },
+        }
+      );
+
+      const chosenId = getJevChoice(jevRes, "target_input");
+      const confidence = getJevConfidence(jevRes, "target_input");
+
+      if (!chosenId || chosenId === "none") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ℹ️ [Jev 1.14] Evaluated ${inputs.length} inputs, but none matched the intent: "${args.intent}".`,
+            },
+          ],
+        };
+      }
+
+      const target = inputs.find((e) => e.id === chosenId);
+      if (!target) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Jev chose input ID '${chosenId}', but it could not be resolved.` }],
+        };
+      }
+
+      const typeRes = await sendCmd("/type", {
+        selector: target.selector,
+        text: args.text,
+        clear: true,
+      });
+      if (typeRes.error) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Jev selected input (${target.selector}), but typing failed: ${typeRes.error}` }],
+        };
+      }
+
+      let enterNote = "";
+      if (args.press_enter) {
+        await sendCmd("/press_key", { key: "Enter" });
+        enterNote = " (and pressed Enter)";
+      }
+
+      const confText = confidence !== null ? ` (confidence: ${(confidence * 100).toFixed(1)}%)` : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `⚡ [Jev 1.14 Smart Type] Intent: "${args.intent}"\nTyped "${args.text}" into ${target.selector}${enterNote}${confText}`,
+          },
+        ],
+      };
+    }
+
+    if (name === "browse_decide") {
+      const jev = getJevConfig();
+      if (!jev.isActive) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "⚠️ 'browse_decide' requires Jev to be enabled. Set ENABLE_JEV=true and provide OPENROUTER_API_KEY in your .env file.",
+            },
+          ],
+        };
+      }
+
+      const snap = await sendCmd("/snapshot");
+      const pageSummary = (snap.text || "").slice(0, 4000);
+      const decType = args.type === "choice" ? "choice" : "noul";
+
+      const questionObj = {
+        type: decType,
+        instructions: args.question,
+      };
+      if (decType === "choice" && args.options && typeof args.options === "object") {
+        questionObj.criteria = args.options;
+      }
+
+      const jevRes = await callJevDecisions(
+        {
+          url: snap.url || "",
+          title: snap.title || "",
+          content_summary: pageSummary,
+        },
+        {
+          evaluation: questionObj,
+        }
+      );
+
+      const decisionData = jevRes?.decisions?.evaluation || jevRes?.evaluation || jevRes;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `⚡ [Jev 1.14 Decision]\nQuestion: "${args.question}"\nType: ${decType}\nPage: ${snap.url} (${snap.title})\n\nDecision:\n${JSON.stringify(decisionData, null, 2)}`,
+          },
+        ],
       };
     }
 
