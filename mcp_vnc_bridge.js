@@ -178,7 +178,12 @@ async function generateFieldText(goal, action, pageState, history, jevConfig) {
         messages: [
           {
             role: "system",
-            content: `Return a JSON object with exactly one key, "text": the exact string to type into the field based on the user's goal. No markdown, commentary or code. Example: {"text": "Lisbon"}`,
+            content: `You are an expert browser automation assistant. Determine the exact value to type into the specified field to fulfill the user's goal.
+Rules:
+1. Return strictly JSON: {"text": "exact value"}.
+2. Never output meta-instructions, commentary, or placeholders like "your destination", "field value", or "city name".
+3. If the user specifies a location/value, use it. If no location is mentioned and the field requires a destination/city, infer a realistic default (e.g. "Lisbon" or "Porto").
+4. If the field is a search query and the user wants "cheapest hostel", type "hostel" or "cheap hostel".`,
           },
           {
             role: "user",
@@ -192,8 +197,8 @@ async function generateFieldText(goal, action, pageState, history, jevConfig) {
       const data = await res.json();
       const rawContent = data?.choices?.[0]?.message?.content || "{}";
       const parsed = JSON.parse(rawContent);
-      if (parsed && typeof parsed.text === "string") {
-        return parsed.text;
+      if (parsed && typeof parsed.text === "string" && parsed.text.trim()) {
+        return parsed.text.trim();
       }
     }
   } catch (e) {
@@ -203,13 +208,93 @@ async function generateFieldText(goal, action, pageState, history, jevConfig) {
   return goal.split(" ").slice(0, 3).join(" ");
 }
 
+async function system2Unblocker(goal, pageState, elements, targets, controls, history, stuckReason, jevConfig) {
+  const apiKey = jevConfig.apiKey;
+  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-4o-mini";
+
+  const visibleElementsSummary = (elements || []).slice(0, 50).map((e) => {
+    let s = `[${e.index}] <${e.role || "el"}> "${e.label}"`;
+    if (e.value) s += ` (value: "${e.value}")`;
+    if (e.operations?.length) s += ` [can: ${e.operations.join(",")}]`;
+    return s;
+  });
+
+  const promptData = {
+    goal: goal,
+    current_page: {
+      url: pageState.url,
+      title: pageState.title,
+      text_summary: (pageState.text || "").slice(0, 3000),
+    },
+    stuck_reason: stuckReason,
+    recent_history: (history || []).slice(-4).map((h) => ({
+      step: h.step,
+      operation: h.operation,
+      action: h.action,
+      text: h.text,
+      error: h.error,
+    })),
+    interactive_elements: visibleElementsSummary,
+  };
+
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: textModel,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You are the System-2 Copilot of an autonomous web agent.
+The fast System-1 pilot got stuck or blocked on the user's goal.
+Analyze the page, history, and interactive elements. Choose the single best corrective action to unblock progress:
+
+Supported operations:
+- {"operation": "CLICK", "target_index": "<number>", "reason": "<why>"}
+- {"operation": "TYPE_TEXT", "target_index": "<number>", "text": "<exact string>", "reason": "<why>"}
+- {"operation": "SELECT", "target_index": "<number:option>", "reason": "<why>"}
+- {"operation": "SCROLL_DOWN", "reason": "<why>"}
+- {"operation": "SCROLL_UP", "reason": "<why>"}
+- {"operation": "DONE", "reason": "<why the goal is already fully satisfied>"}
+- {"operation": "BLOCKED", "reason": "<why it cannot proceed, e.g. CAPTCHA or missing credentials>"}
+
+Return strictly valid JSON with the chosen operation object.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify(promptData),
+          },
+        ],
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const rawContent = data?.choices?.[0]?.message?.content || "{}";
+      const decision = JSON.parse(rawContent);
+      if (decision && decision.operation) {
+        return decision;
+      }
+    }
+  } catch (err) {
+    console.error("[system2Unblocker error]:", err.message);
+  }
+
+  return null;
+}
+
 async function runUltraFastLoop(goal, options = {}) {
   const maxSteps = Math.min(Math.max(Number(options.max_steps) || 15, 1), 30);
   const jev = getJevConfig();
   if (!jev.isActive) {
     return {
       status: "error",
-      error: "Ultra-Fast mode requires Jev to be enabled. Set ENABLE_JEV=true and provide OPENROUTER_API_KEY in .env.",
+      error: "Hybrid Ultra-Fast mode requires Jev & LLM to be enabled. Set ENABLE_JEV=true and provide OPENROUTER_API_KEY in .env.",
     };
   }
 
@@ -247,18 +332,6 @@ async function runUltraFastLoop(goal, options = {}) {
 
     if (fp === lastFingerprint) {
       repeatCount++;
-      if (repeatCount >= 3) {
-        return {
-          status: "blocked",
-          reason: "Page state did not change after 3 consecutive actions (stagnation detected).",
-          goal,
-          steps_executed: step - 1,
-          final_url: state.url,
-          history,
-          elapsed_ms: Date.now() - startedAt,
-          suggestion: "Use Normal Mode (browse_snapshot / browse_click) to resolve the blockage.",
-        };
-      }
     } else {
       repeatCount = 0;
     }
@@ -331,7 +404,8 @@ async function runUltraFastLoop(goal, options = {}) {
     }
 
     const jevStart = Date.now();
-    let jevRes;
+    let jevRes = null;
+    let jevError = null;
     try {
       jevRes = await callJevDecisions(
         {
@@ -350,22 +424,23 @@ async function runUltraFastLoop(goal, options = {}) {
         questions
       );
     } catch (e) {
-      return {
-        status: "error",
-        error: `Jev decision request failed at step ${step}: ${e.message}`,
-        history,
-        elapsed_ms: Date.now() - startedAt,
-      };
+      jevError = e.message;
     }
 
-    const jevLatency = Date.now() - jevStart;
+    let jevLatency = Date.now() - jevStart;
     const answers = jevRes?.answers || {};
     const opAnswer = answers.operation;
-    const selectedOp = opAnswer?.choice || "BLOCKED";
+    let selectedOp = opAnswer?.choice || "BLOCKED";
+    let targetIndex = null;
+    let targetAction = null;
+    let textToType = null;
+    let usedEngine = "jev";
+    let stepReason = opAnswer?.reason || "";
 
     if (selectedOp === "DONE") {
       history.push({
         step,
+        engine: "jev",
         operation: "DONE",
         action: "Goal visibly satisfied",
         latency_ms: jevLatency,
@@ -378,32 +453,9 @@ async function runUltraFastLoop(goal, options = {}) {
         final_title: state.title,
         history,
         elapsed_ms: Date.now() - startedAt,
-        message: "Goal successfully completed in Ultra-Fast mode.",
+        message: "Goal successfully completed in Hybrid mode.",
       };
     }
-
-    if (selectedOp === "BLOCKED") {
-      history.push({
-        step,
-        operation: "BLOCKED",
-        action: "No action can make progress",
-        latency_ms: jevLatency,
-      });
-      return {
-        status: "blocked",
-        reason: "Jev determined that no supported operation can make progress towards the goal.",
-        goal,
-        steps_executed: step,
-        final_url: state.url,
-        history,
-        elapsed_ms: Date.now() - startedAt,
-        suggestion: "Use Normal Mode to inspect or complete the task.",
-      };
-    }
-
-    let targetAction = null;
-    let targetIndex = null;
-    let textToType = null;
 
     if (targets[selectedOp]) {
       const targetAns = answers[`${selectedOp.toLowerCase()}_target`];
@@ -413,7 +465,145 @@ async function runUltraFastLoop(goal, options = {}) {
       targetAction = controls[selectedOp];
     }
 
+    // Determine if System-2 unblocker should be triggered:
+    // 1. Jev threw an error
+    // 2. Jev chose BLOCKED
+    // 3. Jev selected an operation but could not resolve target element
+    // 4. Page state stagnated (repeatCount >= 2)
+    // 5. Jev returned low confidence (< 0.35)
+    const needsSystem2 = Boolean(
+      jevError ||
+      selectedOp === "BLOCKED" ||
+      !targetAction ||
+      repeatCount >= 2 ||
+      (opAnswer?.confidence !== undefined && opAnswer.confidence < 0.35)
+    );
+
+    if (needsSystem2) {
+      let stuckReason = "";
+      if (jevError) {
+        stuckReason = `System-1 (Jev) request error: ${jevError}`;
+      } else if (repeatCount >= 2) {
+        stuckReason = `Page state stagnated (no DOM change) after step ${step - 1}. Repeating previous action will not work.`;
+      } else if (selectedOp === "BLOCKED") {
+        stuckReason = `System-1 (Jev) marked BLOCKED: unable to choose next step autonomously.`;
+      } else if (!targetAction) {
+        stuckReason = `System-1 chose '${selectedOp}' but target element could not be found.`;
+      } else {
+        stuckReason = `Low confidence (${opAnswer?.confidence}) from System-1.`;
+      }
+
+      const s2Start = Date.now();
+      const s2Decision = await system2Unblocker(
+        goal,
+        state,
+        elements,
+        targets,
+        controls,
+        history,
+        stuckReason,
+        jev
+      );
+      const s2Latency = Date.now() - s2Start;
+
+      if (s2Decision && s2Decision.operation) {
+        usedEngine = "system-2";
+        jevLatency += s2Latency;
+        stepReason = s2Decision.reason || "System-2 unblocked action";
+        const s2Op = s2Decision.operation.toUpperCase();
+
+        if (s2Op === "DONE") {
+          history.push({
+            step,
+            engine: "system-2",
+            operation: "DONE",
+            action: "Goal visibly satisfied",
+            reason: stepReason,
+            latency_ms: jevLatency,
+          });
+          return {
+            status: "completed",
+            goal,
+            steps_executed: step,
+            final_url: state.url,
+            final_title: state.title,
+            history,
+            elapsed_ms: Date.now() - startedAt,
+            message: "Goal successfully completed in Hybrid mode.",
+          };
+        }
+
+        if (s2Op === "BLOCKED") {
+          history.push({
+            step,
+            engine: "system-2",
+            operation: "BLOCKED",
+            action: stepReason || "System-2 confirmed blocked",
+            latency_ms: jevLatency,
+          });
+          return {
+            status: "blocked",
+            reason: stepReason || "System-2 confirmed no further action can progress towards the goal.",
+            goal,
+            steps_executed: step,
+            final_url: state.url,
+            history,
+            elapsed_ms: Date.now() - startedAt,
+            suggestion: "Use Normal Mode (browse_click / browse_snapshot) to inspect or complete the task.",
+          };
+        }
+
+        selectedOp = s2Op;
+        const rawTarget = s2Decision.target_index != null ? String(s2Decision.target_index).trim() : null;
+        targetIndex = rawTarget;
+        targetAction = null;
+
+        if (rawTarget) {
+          if (targets[selectedOp]?.[rawTarget]) {
+            targetAction = targets[selectedOp][rawTarget];
+          } else if (targets.CLICK?.[rawTarget]) {
+            targetAction = targets.CLICK[rawTarget];
+            selectedOp = "CLICK";
+          } else if (targets.TYPE_TEXT?.[rawTarget]) {
+            targetAction = targets.TYPE_TEXT[rawTarget];
+            selectedOp = "TYPE_TEXT";
+          } else if (targets.SELECT?.[rawTarget]) {
+            targetAction = targets.SELECT[rawTarget];
+            selectedOp = "SELECT";
+          }
+        }
+
+        if (!targetAction && controls[selectedOp]) {
+          targetAction = controls[selectedOp];
+        }
+
+        if (s2Decision.text) {
+          textToType = String(s2Decision.text).trim();
+        }
+      }
+    }
+
     if (!targetAction) {
+      if (selectedOp === "BLOCKED") {
+        history.push({
+          step,
+          engine: usedEngine,
+          operation: "BLOCKED",
+          action: "No action can make progress",
+          latency_ms: jevLatency,
+        });
+        return {
+          status: "blocked",
+          reason: "System was unable to resolve a viable next action to progress towards the goal.",
+          goal,
+          steps_executed: step,
+          final_url: state.url,
+          history,
+          elapsed_ms: Date.now() - startedAt,
+          suggestion: "Use Normal Mode to inspect or complete the task.",
+        };
+      }
+
       return {
         status: "blocked",
         reason: `Target element for operation '${selectedOp}' could not be resolved.`,
@@ -424,7 +614,7 @@ async function runUltraFastLoop(goal, options = {}) {
       };
     }
 
-    if (targetAction.kind === "fill") {
+    if (targetAction.kind === "fill" && !textToType) {
       textToType = await generateFieldText(goal, targetAction, state, history, jev);
     }
 
@@ -432,25 +622,17 @@ async function runUltraFastLoop(goal, options = {}) {
     const actRes = await sendCmd("/act_fast", { action: targetAction, text: textToType });
     const actLatency = Date.now() - actStart;
 
-    if (actRes.error) {
-      history.push({
-        step,
-        operation: selectedOp,
-        action: targetAction.label || targetAction.id,
-        target_index: targetIndex,
-        error: actRes.error,
-        latency_ms: jevLatency + actLatency,
-      });
-    } else {
-      history.push({
-        step,
-        operation: selectedOp,
-        action: targetAction.label || targetAction.id,
-        target_index: targetIndex,
-        text: textToType,
-        latency_ms: jevLatency + actLatency,
-      });
-    }
+    history.push({
+      step,
+      engine: usedEngine,
+      operation: selectedOp,
+      action: targetAction.label || targetAction.id,
+      target_index: targetIndex,
+      text: textToType,
+      reason: stepReason,
+      latency_ms: jevLatency + actLatency,
+      error: actRes.error || null,
+    });
 
     await new Promise((r) => setTimeout(r, 350));
   }
@@ -648,7 +830,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (jev.isActive) {
     tools.push({
       name: "browse_ultrafast",
-      description: "ULTRA-FAST AUTONOMOUS BROWSER AGENT: Executes multi-step web tasks autonomously in seconds (inspired by browser-use/jev-ultrafast). Uses TypeSafe Jev 1.14 System-1 decisions over indexed DOM elements with humanized mouse trajectories. If blocked or unable to reach goal, safely halts and returns state for Normal Mode intervention.",
+      description: "HYBRID ULTRA-FAST AUTONOMOUS BROWSER AGENT: Multi-step autonomous web task execution combining TypeSafe Jev 1.14 System-1 fast pilot (~150ms per step) with an intelligent System-2 LLM unblocker for complex widgets, dropdowns, and stagnations. Humanized mouse movements (Bézier curves). Halts safely on captchas or blockers.",
       inputSchema: {
         type: "object",
         properties: {
@@ -915,18 +1097,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const formattedHistory = (result.history || [])
         .map((h) => {
+          const engineTag = h.engine === "system-2" ? "[🧠 System-2]" : "[⚡ Jev]";
           const detail = h.text ? ` -> typed "${h.text}"` : (h.error ? ` -> error: ${h.error}` : "");
-          return `Step ${h.step}: [${h.operation}] ${h.action || ""}${detail} (${h.latency_ms || 0}ms)`;
+          const reasonTag = h.reason ? ` (${h.reason})` : "";
+          return `Step ${h.step} ${engineTag}: [${h.operation}] ${h.action || ""}${detail}${reasonTag} [${h.latency_ms || 0}ms]`;
         })
         .join("\n");
 
       let statusMsg = "";
       if (result.status === "completed") {
-        statusMsg = `⚡ [Ultra-Fast Agent: COMPLETED in ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nFinal URL: ${result.final_url} (${result.final_title || ""})\nSteps executed: ${result.steps_executed}\n\nExecution Log:\n${formattedHistory || "Done"}`;
+        statusMsg = `⚡ [Hybrid Agent: COMPLETED in ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nFinal URL: ${result.final_url} (${result.final_title || ""})\nSteps executed: ${result.steps_executed}\n\nExecution Log:\n${formattedHistory || "Done"}`;
       } else if (result.status === "blocked") {
-        statusMsg = `⚠️ [Ultra-Fast Agent: BLOCKED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nReason: ${result.reason}\nFinal URL: ${result.final_url || ""}\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Use Normal Mode to continue."}\n\nExecution Log:\n${formattedHistory || "None"}`;
+        statusMsg = `⚠️ [Hybrid Agent: BLOCKED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nReason: ${result.reason}\nFinal URL: ${result.final_url || ""}\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Use Normal Mode to continue."}\n\nExecution Log:\n${formattedHistory || "None"}`;
       } else {
-        statusMsg = `⏱️ [Ultra-Fast Agent: BUDGET REACHED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Continue with Normal Mode."}\n\nExecution Log:\n${formattedHistory || "None"}`;
+        statusMsg = `⏱️ [Hybrid Agent: BUDGET REACHED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Continue with Normal Mode."}\n\nExecution Log:\n${formattedHistory || "None"}`;
       }
 
       return {
