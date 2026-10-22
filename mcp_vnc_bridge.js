@@ -469,17 +469,28 @@ async function runUltraFastLoop(goal, options = {}) {
       targetAction = controls[selectedOp];
     }
 
+    const lastAction = history[history.length - 1];
+    const candidateActionName = targetAction ? (targetAction.label || targetAction.id) : null;
+    const isActionLoop = Boolean(
+      lastAction &&
+      candidateActionName &&
+      lastAction.action === candidateActionName &&
+      lastAction.operation === selectedOp
+    );
+
     // Determine if System-2 unblocker should be triggered:
     // 1. Jev threw an error
     // 2. Jev chose BLOCKED
     // 3. Jev selected an operation but could not resolve target element
     // 4. Page state stagnated (repeatCount >= 2)
-    // 5. Jev returned low confidence (< 0.35)
+    // 5. Action loop detected (repeating exact same action)
+    // 6. Jev returned low confidence (< 0.35)
     const needsSystem2 = Boolean(
       jevError ||
       selectedOp === "BLOCKED" ||
       !targetAction ||
       repeatCount >= 2 ||
+      isActionLoop ||
       (opAnswer?.confidence !== undefined && opAnswer.confidence < 0.35)
     );
 
@@ -487,6 +498,8 @@ async function runUltraFastLoop(goal, options = {}) {
       let stuckReason = "";
       if (jevError) {
         stuckReason = `System-1 (Jev) request error: ${jevError}`;
+      } else if (isActionLoop) {
+        stuckReason = `Action oscillation loop detected: System-1 attempted to repeat '${selectedOp}' on '${candidateActionName}' which was already executed in the previous step. Select a different child control, sub-button, or proceed with Search.`;
       } else if (repeatCount >= 2) {
         stuckReason = `Page state stagnated (no DOM change) after step ${step - 1}. Repeating previous action will not work.`;
       } else if (selectedOp === "BLOCKED") {
