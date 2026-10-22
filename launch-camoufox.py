@@ -714,10 +714,19 @@ def main():
 
                     elif endpoint == '/observe_fast':
                         try:
-                            info = curr_page.evaluate(SNAPSHOT_JS)
+                            info = None
+                            for attempt in range(12):
+                                try:
+                                    info = curr_page.evaluate(SNAPSHOT_JS)
+                                    if info is not None:
+                                        break
+                                except Exception:
+                                    pass
+                                time.sleep(0.1)
+
                             if not info:
                                 result_holder["http_status"] = 500
-                                result_holder["payload"] = {"error": "Failed to extract page state"}
+                                result_holder["payload"] = {"error": "Failed to extract page state (page may still be navigating)"}
                             else:
                                 content = {
                                     "url": info.get("url", ""),

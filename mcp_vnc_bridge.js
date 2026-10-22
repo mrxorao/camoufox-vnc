@@ -228,7 +228,11 @@ async function runUltraFastLoop(goal, options = {}) {
   let repeatCount = 0;
 
   for (let step = 1; step <= maxSteps; step++) {
-    const obsRes = await sendCmd("/observe_fast");
+    let obsRes = await sendCmd("/observe_fast");
+    if (obsRes.error || !obsRes.state) {
+      await new Promise((r) => setTimeout(r, 600));
+      obsRes = await sendCmd("/observe_fast");
+    }
     if (obsRes.error || !obsRes.state) {
       return {
         status: "error",
