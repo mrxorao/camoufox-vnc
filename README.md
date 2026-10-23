@@ -1,20 +1,24 @@
-# 🦊 Camoufox VNC Docker & MCP Bridge (Anti-Detect & Stealth Automation)
+# 🦊 Camoufox VNC & Camoufox MCP — Stealth Browser with Fast Jev Autonomous Engine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docker Image](https://img.shields.io/badge/Docker-mrxorao%2Fcamoufox--vnc-blue.svg)](https://hub.docker.com/r/mrxorao/camoufox-vnc)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)
 
-Self-contained, ultra-optimized Docker environment running **Camoufox** (a Firefox fork with a C++ stealth anti-detection engine), with real-time web viewing via **noVNC** (port `5800`), direct **VNC** (port `5900`) and full control through **Model Context Protocol (MCP)** for AI agents (OpenCode, Cursor, Claude Desktop, etc.).
+**Camoufox VNC** meets **Camoufox MCP**: A self-contained, anti-detect Docker stealth browser environment combining live **noVNC** visual streaming (`:5800`), a native **Model Context Protocol (MCP)** server for AI coding agents, and the **Camoufox Fast Jev** autonomous decision engine (~150ms/step pure Jev 1.14).
 
 ---
 
 ## ✨ Key Features
 
-* 🛡️ **Maximum-level anti-detection (score 0–3):** `navigator.webdriver = false`, realistic hardware emulation (WebGL, Canvas, Audio, GPU, Windows fonts).
-* 🌐 **Live noVNC web UI:** watch in real time every click, search and scroll made by you or the AI agent ([http://localhost:5800](http://localhost:5800)). Opens directly, no "Connect" click needed.
-* 🔌 **Built-in MCP bridge:** control the browser with 13+ tools (navigation, clicks, typing, screenshots, tab management, file uploads and JS execution).
-* 📎 **File upload & download support:** upload files from your PC straight into `<input type='file'>` elements and keep downloads in `./data/downloads`.
-* 🔄 **Auto-update on boot:** on every container start, Camoufox and the C++ binaries update automatically to the latest GitHub/PyPI release.
-* 💾 **Session & login persistence:** dedicated Docker volume (`camoufox_profile`) preserving cookies, logins, history and extensions across restarts and image rebuilds.
-* 🚀 **VPS-ready:** runs on any remote server with browser viewing and remote MCP control. Public image, no login required.
+* 🛡️ **Camoufox Anti-Detect Core:** C++ stealth Firefox fork with fingerprint spoofing (`navigator.webdriver = false`, WebGL, Canvas, Audio, GPU, font randomization).
+* 🌐 **Camoufox VNC (Live Visual Stream):** Watch every click, search, and navigation in real time directly in your browser on `http://localhost:5800` (auto-connects with zero clicks).
+* 🔌 **Camoufox MCP Server (15 Native Tools):** Complete control for AI agents (Cursor, Claude Desktop, Antigravity, OpenCode, Windsurf, LangChain) with navigation, typing, clicks, screenshots, tab management, file uploads and JS execution.
+* ⚡ **Camoufox Fast Jev (`browse_fast`):** Ultra-fast multi-step autonomous browsing powered by TypeSafe Jev 1.14 decisions (~150ms per step, zero LLM reasoning tokens).
+* 🖱️ **Humanized Bézier Mouse Physics:** Smooth cubic Bézier mouse movement with variable acceleration and micro-jitter that bypasses bot movement detectors.
+* 📑 **Single-Window Tab Management:** Clean single-window tab workflow (`browse_new_tab`, `browse_tabs`, `browse_switch_tab`, `browse_close_tab`) preventing messy multi-window states.
+* 📎 **File Upload & Download Support:** Upload host files straight into `<input type='file'>` elements and keep downloads in `./data/downloads`.
+* 🔄 **Auto-Update on Boot:** Automatically fetches and updates the latest Camoufox engine and C++ binaries on container startup.
+* 💾 **Session & Login Persistence:** Dedicated Docker volume preserving cookies, logins, history and extensions.
 
 ---
 

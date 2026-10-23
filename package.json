@@ -1,7 +1,25 @@
 {
   "name": "camoufox-vnc-mcp",
   "version": "1.0.0",
+  "description": "Camoufox VNC & Camoufox MCP: Anti-detect stealth browser in Docker with live noVNC streaming, Model Context Protocol (MCP), and Camoufox Fast Jev autonomous agent.",
   "type": "module",
+  "keywords": [
+    "camoufox",
+    "camoufox-mcp",
+    "camoufox-vnc",
+    "camoufox-fast-jev",
+    "fast-jev",
+    "jev",
+    "mcp",
+    "model-context-protocol",
+    "stealth-browser",
+    "anti-detect",
+    "novnc",
+    "ai-agent",
+    "playwright"
+  ],
+  "author": "Hugo Chorao",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1"
   }
