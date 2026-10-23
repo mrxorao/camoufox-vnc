@@ -291,6 +291,35 @@ Important rules:
   return null;
 }
 
+async function waitForPageSettle(lastAction = null, maxWaitMs = 2500) {
+  const isHeavyAction = lastAction && (
+    lastAction.operation === "CLICK" &&
+    /search|pesquisar|submit|filter|sort|ordenar|book|next|proximo|continuar|navigate|enter/i.test(lastAction.action || "")
+  );
+
+  const initialDelay = isHeavyAction ? 700 : 300;
+  await new Promise((r) => setTimeout(r, initialDelay));
+
+  const checkScript = `(() => {
+    const ready = document.readyState === 'complete';
+    const busy = Boolean(document.querySelector('[aria-busy="true"], [data-testid="loading-spinner"], .bui-spinner, [role="progressbar"], .skeleton, .shimmer'));
+    return { ready, busy };
+  })()`;
+
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await sendCmd("/evaluate", { script: checkScript });
+      if (res && res.result && res.result.ready && !res.result.busy) {
+        break;
+      }
+    } catch (e) {
+      // Ignore evaluation errors while navigating
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
 async function runAutonomousLoop(goal, options = {}) {
   const maxSteps = Math.min(Math.max(Number(options.max_steps) || 15, 1), 30);
   const isHybrid = options.mode !== "fast"; // "fast" = pure Jev, "hybrid" = dual-system
@@ -308,7 +337,7 @@ async function runAutonomousLoop(goal, options = {}) {
       targetUrl = "https://" + targetUrl;
     }
     await sendCmd("/navigate", { url: targetUrl });
-    await new Promise((r) => setTimeout(r, 1200));
+    await waitForPageSettle({ operation: "CLICK", action: "navigate" }, 3000);
   }
 
   const history = [];
@@ -771,7 +800,10 @@ async function runAutonomousLoop(goal, options = {}) {
       error: actRes.error || null,
     });
 
-    await new Promise((r) => setTimeout(r, 350));
+    await waitForPageSettle({
+      operation: selectedOp,
+      action: targetAction.label || targetAction.id,
+    });
   }
 
   return {
