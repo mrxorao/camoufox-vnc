@@ -103,28 +103,6 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |
-| `browse_ultrafast(goal, url, max_steps)` | *(Optional, Jev 1.14)* Autonomous Ultra-Fast multi-step web agent (inspired by `browser-use/jev-ultrafast`). Executes end-to-end tasks in seconds using indexed element tables and Jev decisions. |
-
----
-
-## ⚡ TypeSafe Jev 1.14 Ultra-Fast Autonomous Mode (Optional)
-
-Inspired by [`browser-use/jev-ultrafast`](https://github.com/browser-use/jev-ultrafast), you can activate the **Ultra-Fast Autonomous Agent Mode** powered by **TypeSafe Jev 1.14** via OpenRouter. 
-
-Instead of waiting for slow multimodal LLMs to analyze heavy screenshots on every step, `browse_ultrafast` uses:
-1. **Indexed DOM Action Space:** Extracts all visible interactive controls atomically (`[1..N]`).
-2. **System-1 Fast Decisions:** Jev evaluates operations (`CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) in ~150ms.
-3. **Selective Text Generation:** Text generation is called strictly when typing is needed.
-4. **Humanized Trajectory:** Every action is executed with realistic mouse movement and full noVNC live observability.
-5. **System-2 Safe Fallback:** If blocked or if a CAPTCHA appears, the agent safely halts and hands over control with a complete diagnostic report for Normal Mode intervention.
-
-### Configuration (`.env`)
-```bash
-ENABLE_JEV=true
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-JEV_MODEL=typesafe/jev-1.14
-JEV_TEXT_MODEL=openai/gpt-6-luna
-```
 
 ---
 
@@ -142,9 +120,6 @@ JEV_TEXT_MODEL=openai/gpt-6-luna
 | `AUTO_UPDATE` | Auto-update Camoufox on boot | `true` |
 | `START_URL` | Page opened on startup | `https://duckduckgo.com` |
 | `VNC_PASSWORD` | VNC access password (optional) | *(empty)* |
-| `ENABLE_JEV` | Enable TypeSafe Jev 1.14 decision tools (`true`/`false`) | `false` |
-| `OPENROUTER_API_KEY` | OpenRouter API Key for Jev decisions | *(empty)* |
-| `JEV_MODEL` | Jev decision model identifier | `typesafe/jev-1.14` |
 
 ---
 
