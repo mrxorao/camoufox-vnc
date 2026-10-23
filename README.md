@@ -123,7 +123,7 @@ Instead of waiting for slow multimodal LLMs to analyze heavy screenshots on ever
 ENABLE_JEV=true
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 JEV_MODEL=typesafe/jev-1.14
-JEV_TEXT_MODEL=openai/gpt-4o-mini
+JEV_TEXT_MODEL=openai/gpt-6-luna
 ```
 
 ---
