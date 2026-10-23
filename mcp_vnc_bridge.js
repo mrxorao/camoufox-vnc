@@ -127,12 +127,70 @@ function buildActionSpace(actions) {
   return { elements, targets, controls };
 }
 
-function extractFieldText(goal) {
-  if (!goal) return "";
-  const cleaned = goal
-    .replace(/^(pesquisa por|pesquisar por|pesquisa|pesquisar|search for|search|procura por|procura|find|book|type|enter|digita|escreve)\s+/i, "")
-    .trim();
-  return cleaned || goal.trim();
+async function generateFieldText(goal, action, pageState, history, jevConfig) {
+  const apiKey = jevConfig.apiKey;
+  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-6-luna";
+  const context = {
+    goal: goal,
+    target_field: {
+      label: action.label,
+      role: action.role,
+      id: action.id,
+      current_value: action.value || "",
+    },
+    page_title: pageState.title,
+    recent_history: (history || []).slice(-3).map((h) => ({
+      operation: h.operation,
+      action: h.action,
+      text: h.text,
+    })),
+  };
+
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: textModel,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You are a precision web form-filling agent helper.
+Given a user goal and a target field, return ONLY a JSON object: {"text": "exact value to type"}.
+Rules:
+1. Extract ONLY the specific value relevant to the target field label:
+   - If field is "Origem" / "From" / "Departure" -> extract the origin location (e.g. "Oliveira do Hospital").
+   - If field is "Destino" / "To" / "Arrival" -> extract the destination location (e.g. "São Pedro do Sul").
+   - If field is a date input -> extract the date or day requested.
+   - If field is a general search bar -> extract the main search query keyword.
+2. NEVER output full sentences, instructions, or explanations.
+3. Clean all punctuation, quotes, or conversational filler. Output strictly the clean entity.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify(context),
+          },
+        ],
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const rawContent = data?.choices?.[0]?.message?.content || "{}";
+      const parsed = JSON.parse(rawContent);
+      if (parsed && typeof parsed.text === "string" && parsed.text.trim()) {
+        return parsed.text.trim();
+      }
+    }
+  } catch (e) {
+    console.error("[generateFieldText error]:", e.message);
+  }
+
+  return goal.split(" ").slice(0, 3).join(" ");
 }
 
 async function waitForPageSettle(lastAction = null, maxWaitMs = 1500) {
@@ -408,7 +466,7 @@ async function runFastAutonomousLoop(goal, options = {}) {
     }
 
     if (targetAction.kind === "fill" && !textToType) {
-      textToType = extractFieldText(goal);
+      textToType = await generateFieldText(goal, targetAction, state, history, jev);
     }
 
     const actStart = Date.now();
