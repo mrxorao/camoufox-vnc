@@ -120,7 +120,6 @@ Powered by **TypeSafe Jev 1.14** via OpenRouter:
 ENABLE_JEV=true
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 JEV_MODEL=typesafe/jev-1.14
-JEV_TEXT_MODEL=openai/gpt-6-luna
 ```
 
 ---
@@ -142,7 +141,6 @@ JEV_TEXT_MODEL=openai/gpt-6-luna
 | `ENABLE_JEV` | Enable TypeSafe Jev 1.14 Fast mode (`true`/`false`) | `false` |
 | `OPENROUTER_API_KEY` | OpenRouter API Key for Jev decisions | *(empty)* |
 | `JEV_MODEL` | Jev decision model identifier | `typesafe/jev-1.14` |
-| `JEV_TEXT_MODEL` | Text generation model for form fills | `openai/gpt-6-luna` |
 
 ---
 

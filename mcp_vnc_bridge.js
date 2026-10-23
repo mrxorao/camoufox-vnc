@@ -127,65 +127,12 @@ function buildActionSpace(actions) {
   return { elements, targets, controls };
 }
 
-async function generateFieldText(goal, action, pageState, history, jevConfig) {
-  const apiKey = jevConfig.apiKey;
-  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-6-luna";
-  const context = {
-    goal: goal,
-    field: {
-      label: action.label,
-      role: action.role,
-      current_value: action.value,
-    },
-    page_title: pageState.title,
-    recent_actions: (history || []).slice(-4).map((h) => ({
-      operation: h.operation,
-      action: h.action,
-      text: h.text,
-    })),
-  };
-
-  try {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: textModel,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert browser automation assistant. Determine the exact value to type into the specified field to fulfill the user's goal.
-Rules:
-1. Return strictly JSON: {"text": "exact value"}.
-2. Never output meta-instructions, commentary, or placeholders like "your destination", "field value", or "city name".
-3. If the user specifies a location/value, use it. If no location is mentioned and the field requires a destination/city, infer a realistic default (e.g. "Lisbon" or "Porto").
-4. If the field is a search query and the user wants "cheapest hostel", type "hostel" or "cheap hostel".`,
-          },
-          {
-            role: "user",
-            content: JSON.stringify(context),
-          },
-        ],
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const rawContent = data?.choices?.[0]?.message?.content || "{}";
-      const parsed = JSON.parse(rawContent);
-      if (parsed && typeof parsed.text === "string" && parsed.text.trim()) {
-        return parsed.text.trim();
-      }
-    }
-  } catch (e) {
-    console.error("[generateFieldText error]:", e.message);
-  }
-
-  return goal.split(" ").slice(0, 3).join(" ");
+function extractFieldText(goal) {
+  if (!goal) return "";
+  const cleaned = goal
+    .replace(/^(pesquisa por|pesquisar por|pesquisa|pesquisar|search for|search|procura por|procura|find|book|type|enter|digita|escreve)\s+/i, "")
+    .trim();
+  return cleaned || goal.trim();
 }
 
 async function waitForPageSettle(lastAction = null, maxWaitMs = 1500) {
@@ -426,7 +373,7 @@ async function runFastAutonomousLoop(goal, options = {}) {
     }
 
     if (targetAction.kind === "fill" && !textToType) {
-      textToType = await generateFieldText(goal, targetAction, state, history, jev);
+      textToType = extractFieldText(goal);
     }
 
     const actStart = Date.now();
