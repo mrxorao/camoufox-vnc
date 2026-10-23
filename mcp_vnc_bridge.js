@@ -149,7 +149,7 @@ function buildActionSpace(actions) {
 
 async function generateFieldText(goal, action, pageState, history, jevConfig) {
   const apiKey = jevConfig.apiKey;
-  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-4o-mini";
+  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-6-luna";
   const context = {
     goal: goal,
     field: {
@@ -210,7 +210,7 @@ Rules:
 
 async function system2Unblocker(goal, pageState, elements, targets, controls, history, stuckReason, jevConfig) {
   const apiKey = jevConfig.apiKey;
-  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-4o-mini";
+  const textModel = process.env.JEV_TEXT_MODEL || "openai/gpt-6-luna";
 
   const visibleElementsSummary = (elements || []).slice(0, 50).map((e) => {
     let s = `[${e.index}] <${e.role || "el"}> "${e.label}"`;
