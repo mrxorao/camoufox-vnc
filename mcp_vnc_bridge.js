@@ -342,7 +342,7 @@ async function runAutonomousLoop(goal, options = {}) {
           final_url: state.url,
           history,
           elapsed_ms: Date.now() - startedAt,
-          suggestion: "Use Hybrid Mode (browse_hybrid) or Normal Mode to resolve this blockage.",
+          suggestion: "Execution halted strictly in Fast Mode (Pure Jev). The calling AI must STOP and NOT execute further browser actions without explicit user orders.",
         };
       }
     } else {
@@ -517,7 +517,7 @@ async function runAutonomousLoop(goal, options = {}) {
           final_url: state.url,
           history,
           elapsed_ms: Date.now() - startedAt,
-          suggestion: "Use Hybrid Mode (browse_hybrid) to unblock with AI, or Normal Mode.",
+          suggestion: "Execution halted strictly in Fast Mode (Pure Jev). The calling AI must STOP and NOT execute further browser actions without explicit user orders.",
         };
       }
       if (isActionLoop) {
@@ -537,7 +537,7 @@ async function runAutonomousLoop(goal, options = {}) {
           final_url: state.url,
           history,
           elapsed_ms: Date.now() - startedAt,
-          suggestion: "Use Hybrid Mode (browse_hybrid) to unblock with AI, or Normal Mode.",
+          suggestion: "Execution halted strictly in Fast Mode (Pure Jev). The calling AI must STOP and NOT execute further browser actions without explicit user orders.",
         };
       }
       if (!targetAction) {
@@ -549,7 +549,7 @@ async function runAutonomousLoop(goal, options = {}) {
           final_url: state.url,
           history,
           elapsed_ms: Date.now() - startedAt,
-          suggestion: "Use Hybrid Mode (browse_hybrid) or Normal Mode.",
+          suggestion: "Execution halted strictly in Fast Mode (Pure Jev). The calling AI must STOP and NOT execute further browser actions without explicit user orders.",
         };
       }
     }
@@ -739,7 +739,9 @@ async function runAutonomousLoop(goal, options = {}) {
     steps_executed: maxSteps,
     history,
     elapsed_ms: Date.now() - startedAt,
-    suggestion: "Max step budget reached. Review current state or continue with Normal Mode.",
+    suggestion: !isHybrid
+      ? "Step budget reached in Fast Mode (Pure Jev). The calling AI must STOP and NOT execute further browser actions without explicit user orders."
+      : "Max step budget reached in Hybrid Mode. Review current state or continue with Normal Mode.",
   };
 }
 
@@ -926,7 +928,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (jev.isActive) {
     tools.push({
       name: "browse_fast",
-      description: "FAST AUTONOMOUS BROWSER AGENT (Pure TypeSafe Jev 1.14): Multi-step web task execution at ultra-fast speeds (~150ms per step, zero LLM reasoning tokens). Guided by indexed DOM actions and humanized Bézier mouse trajectories. If an obstacle, complex widget, or loop is encountered, halts immediately with BLOCKED for Normal Mode intervention.",
+      description: "FAST AUTONOMOUS BROWSER AGENT (Pure TypeSafe Jev 1.14): Multi-step web task execution strictly using pure Jev (~150ms per step, zero LLM reasoning tokens). Guided by indexed DOM actions and humanized Bézier mouse trajectories. MANDATORY STOP RULE: If BLOCKED, loop detected, or step budget reached, execution HALTS IMMEDIATELY. The calling AI must STOP and NOT execute any further Camoufox or browser commands without explicit user orders.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1231,9 +1233,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (result.status === "completed") {
         statusMsg = `⚡ [${agentName}: COMPLETED in ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nFinal URL: ${result.final_url} (${result.final_title || ""})\nSteps executed: ${result.steps_executed}\n\nExecution Log:\n${formattedHistory || "Done"}`;
       } else if (result.status === "blocked") {
-        statusMsg = `⚠️ [${agentName}: BLOCKED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nReason: ${result.reason}\nFinal URL: ${result.final_url || ""}\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Use Normal Mode to continue."}\n\nExecution Log:\n${formattedHistory || "None"}`;
+        statusMsg = `⚠️ [${agentName}: BLOCKED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nReason: ${result.reason}\nFinal URL: ${result.final_url || ""}\nSteps executed: ${result.steps_executed}\nDirective: ${result.suggestion || "Stop and await instructions."}\n\nExecution Log:\n${formattedHistory || "None"}`;
       } else {
-        statusMsg = `⏱️ [${agentName}: BUDGET REACHED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nSteps executed: ${result.steps_executed}\nSuggestion: ${result.suggestion || "Continue with Normal Mode."}\n\nExecution Log:\n${formattedHistory || "None"}`;
+        statusMsg = `⏱️ [${agentName}: BUDGET REACHED after ${result.elapsed_ms}ms]\nGoal: "${args.goal}"\nSteps executed: ${result.steps_executed}\nDirective: ${result.suggestion || "Stop and await instructions."}\n\nExecution Log:\n${formattedHistory || "None"}`;
       }
 
       return {
