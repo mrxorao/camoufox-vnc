@@ -263,7 +263,10 @@ Supported operations:
 - {"operation": "DONE", "reason": "<why the goal is already fully satisfied>"}
 - {"operation": "BLOCKED", "reason": "<why it cannot proceed, e.g. CAPTCHA or missing credentials>"}
 
-Return strictly valid JSON with the chosen operation object.`,
+Important rules:
+1. target_index MUST be the integer number [N] of the target element from the interactive_elements list.
+2. For custom dropdowns, popovers, counters, or forms (e.g. booking dates, adults, search submit), always use CLICK on the button element (such as "+", "-", "Done", or "Search"). Never use SELECT unless the element is explicitly an HTML <select>.
+3. Return strictly valid JSON with the chosen operation object.`,
           },
           {
             role: "user",
@@ -667,10 +670,48 @@ async function runAutonomousLoop(goal, options = {}) {
               selectedOp = "SELECT";
             }
           }
+
+          // Fallback: extract integer number from rawTarget (e.g. "[4]" or "4:option" -> "4")
+          if (!targetAction) {
+            const numMatch = rawTarget.match(/\d+/);
+            const numIdx = numMatch ? numMatch[0] : null;
+            if (numIdx) {
+              if (targets.CLICK?.[numIdx]) {
+                targetAction = targets.CLICK[numIdx];
+                selectedOp = "CLICK";
+              } else if (targets.TYPE_TEXT?.[numIdx]) {
+                targetAction = targets.TYPE_TEXT[numIdx];
+                selectedOp = "TYPE_TEXT";
+              }
+            }
+          }
+
+          // Fallback: match by label substring
+          if (!targetAction && targets.CLICK) {
+            const rawLower = rawTarget.toLowerCase();
+            const matched = Object.values(targets.CLICK).find((a) => (a.label || "").toLowerCase().includes(rawLower));
+            if (matched) {
+              targetAction = matched;
+              selectedOp = "CLICK";
+            }
+          }
         }
 
         if (!targetAction && controls[selectedOp]) {
           targetAction = controls[selectedOp];
+        }
+
+        // Fallback: if System-2 was unblocking but target is still missing, trigger Search or Done button
+        if (!targetAction && targets.CLICK) {
+          const fallbackBtn = Object.values(targets.CLICK).find((a) => {
+            const l = (a.label || "").toLowerCase();
+            return l === "search" || l === "done" || l.includes("pesquisar");
+          });
+          if (fallbackBtn) {
+            targetAction = fallbackBtn;
+            selectedOp = "CLICK";
+            stepReason = `System-2 fallback: executed '${fallbackBtn.label}'`;
+          }
         }
 
         if (s2Decision.text) {
