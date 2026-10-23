@@ -1,5 +1,7 @@
 # 🦊 Camoufox VNC Docker & MCP Bridge (Anti-Detect & Stealth Automation)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Self-contained, ultra-optimized Docker environment running **Camoufox** (a Firefox fork with a C++ stealth anti-detection engine), with real-time web viewing via **noVNC** (port `5800`), direct **VNC** (port `5900`) and full control through **Model Context Protocol (MCP)** for AI agents (OpenCode, Cursor, Claude Desktop, etc.).
 
 ---
@@ -168,3 +170,10 @@ camoufox-vnc/
 ├── README.md                       # Full documentation
 └── supervisord.conf                # Internal process management
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for details.
+
