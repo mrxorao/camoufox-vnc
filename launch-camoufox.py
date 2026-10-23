@@ -625,10 +625,49 @@ def main():
                             if not target_url.startswith("http://") and not target_url.startswith("https://"):
                                 target_url = "https://" + target_url
                             timeout = int(data.get('timeout', 30000))
+                            
+                            is_container = ".container/" in target_url.lower()
+                            launcher_page = curr_page
+                            pages_before = set(browser.pages)
+
                             try:
-                                curr_page.goto(target_url, timeout=timeout, wait_until="commit")
+                                launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
                             except Exception as e:
                                 print(f"[Camoufox Navigate Warning]: {e}", flush=True)
+
+                            if is_container:
+                                container_page = None
+                                start_wait = time.time()
+                                while time.time() - start_wait < 5.0:
+                                    candidates = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
+                                    if candidates:
+                                        container_page = candidates[-1]
+                                        break
+                                    time.sleep(0.15)
+
+                                if container_page:
+                                    print(f"[Camoufox Container] Detected new container tab: {container_page.url}", flush=True)
+                                    try:
+                                        if launcher_page != container_page and not launcher_page.is_closed():
+                                            launcher_page.close()
+                                    except Exception as e_close:
+                                        print(f"[Camoufox Container Warning] Failed to close launcher tab: {e_close}", flush=True)
+
+                                    active_pages = [p for p in browser.pages if not p.is_closed()]
+                                    if container_page in active_pages:
+                                        active_tab_index = active_pages.index(container_page)
+                                    else:
+                                        active_tab_index = len(active_pages) - 1
+                                    curr_page = active_pages[active_tab_index]
+                                    try:
+                                        curr_page.bring_to_front()
+                                    except Exception:
+                                        pass
+
+                                    try:
+                                        curr_page.wait_for_load_state("domcontentloaded", timeout=8000)
+                                    except Exception:
+                                        pass
                             
                             page_title = safe_get_title(curr_page)
                             status_cache["url"] = curr_page.url
@@ -644,15 +683,22 @@ def main():
                     elif endpoint == '/snapshot':
                         text = ""
                         try:
-                            text = curr_page.evaluate("() => document.body ? document.body.innerText : ''")
+                            body_loc = curr_page.locator("body")
+                            if body_loc.count() > 0:
+                                text = body_loc.first.inner_text(timeout=4000)
+                            else:
+                                text = curr_page.evaluate("() => document.body ? document.body.innerText : ''")
                         except Exception:
-                            pass
+                            try:
+                                text = curr_page.evaluate("() => document.body ? document.body.innerText : ''")
+                            except Exception:
+                                pass
                         page_title = safe_get_title(curr_page)
                         result_holder["payload"] = {
                             "status": "ok",
                             "url": curr_page.url,
                             "title": page_title,
-                            "text": text[:25000]
+                            "text": (text or "")[:25000]
                         }
 
                     elif endpoint == '/click':
@@ -711,102 +757,6 @@ def main():
                                 curr_page.fill(selector, "")
                             curr_page.type(selector, text_val, delay=int(data.get('delay', 20)))
                             result_holder["payload"] = {"status": "ok"}
-
-                    elif endpoint == '/observe_fast':
-                        try:
-                            info = None
-                            for attempt in range(12):
-                                try:
-                                    info = curr_page.evaluate(SNAPSHOT_JS)
-                                    if info is not None:
-                                        break
-                                except Exception:
-                                    pass
-                                time.sleep(0.1)
-
-                            if not info:
-                                result_holder["http_status"] = 500
-                                result_holder["payload"] = {"error": "Failed to extract page state (page may still be navigating)"}
-                            else:
-                                content = {
-                                    "url": info.get("url", ""),
-                                    "text": info.get("text", ""),
-                                    "actions": info.get("actions", []),
-                                    "scroll": info.get("scroll", {})
-                                }
-                                fp = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
-                                info["fingerprint"] = fp
-                                result_holder["payload"] = {
-                                    "status": "ok",
-                                    "state": info
-                                }
-                        except Exception as e:
-                            result_holder["http_status"] = 500
-                            result_holder["payload"] = {"error": f"observe_fast failed: {str(e)}"}
-
-                    elif endpoint == '/act_fast':
-                        action = data.get('action')
-                        text_val = data.get('text')
-                        if not action:
-                            result_holder["http_status"] = 400
-                            result_holder["payload"] = {"error": "Parameter 'action' is required"}
-                        else:
-                            kind = action.get('kind')
-                            try:
-                                if kind == 'scroll':
-                                    delta = action.get('delta', 560)
-                                    curr_page.evaluate(f"window.scrollBy({{ top: {delta}, behavior: 'smooth' }})")
-                                    time.sleep(0.3)
-                                    result_holder["payload"] = {"status": "ok", "executed": action.get('id')}
-                                elif kind == 'wait':
-                                    time.sleep(1.0)
-                                    try:
-                                        curr_page.wait_for_load_state('domcontentloaded', timeout=2000)
-                                    except Exception:
-                                        pass
-                                    result_holder["payload"] = {"status": "ok", "executed": action.get('id')}
-                                else:
-                                    target = curr_page.evaluate("""(action) => {
-                                      const cache = window.__jevFast;
-                                      if (!cache) return null;
-                                      const e = cache.nodes.get(action.node);
-                                      if (!e || !e.isConnected) return null;
-                                      const r = e.getBoundingClientRect();
-                                      if (!r.width || !r.height) return null;
-                                      const x = r.x + r.width / 2;
-                                      const y = r.y + r.height / 2;
-                                      if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
-                                      if (action.kind === 'select') {
-                                        if (e.tagName === 'SELECT') {
-                                          e.value = action.value;
-                                          e.dispatchEvent(new Event('input', { bubbles: true }));
-                                          e.dispatchEvent(new Event('change', { bubbles: true }));
-                                        }
-                                      }
-                                      return { x, y };
-                                    }""", action)
-
-                                    if not target:
-                                        result_holder["http_status"] = 400
-                                        result_holder["payload"] = {"error": "Target element not found or covered"}
-                                    else:
-                                        tx, ty = target['x'], target['y']
-                                        human_mouse.click(curr_page, tx, ty)
-                                        if kind == 'fill' and text_val is not None:
-                                            time.sleep(0.06)
-                                            curr_page.keyboard.press("ControlOrMeta+A")
-                                            time.sleep(0.03)
-                                            curr_page.keyboard.press("Backspace")
-                                            time.sleep(0.03)
-                                            curr_page.keyboard.type(str(text_val), delay=18)
-                                        result_holder["payload"] = {
-                                            "status": "ok",
-                                            "executed": action.get('id'),
-                                            "point": target
-                                        }
-                            except Exception as e:
-                                result_holder["http_status"] = 500
-                                result_holder["payload"] = {"error": f"act_fast failed: {str(e)}"}
 
                     elif endpoint == '/upload':
                         selector = data.get('selector')
@@ -919,7 +869,25 @@ def main():
 
                     elif endpoint == '/new_tab':
                         url_t = data.get('url', 'https://duckduckgo.com')
+                        is_container = ".container/" in url_t.lower()
+                        pages_before = set(browser.pages)
                         new_p = create_new_tab(browser, curr_page, url_t)
+
+                        if is_container:
+                            start_wait = time.time()
+                            while time.time() - start_wait < 5.0:
+                                candidates = [p for p in browser.pages if p not in pages_before and p != new_p and not p.is_closed()]
+                                if candidates:
+                                    container_page = candidates[-1]
+                                    try:
+                                        if not new_p.is_closed():
+                                            new_p.close()
+                                    except Exception:
+                                        pass
+                                    new_p = container_page
+                                    break
+                                time.sleep(0.15)
+
                         active_pages = [p for p in browser.pages if not p.is_closed()]
                         if new_p in active_pages:
                             active_tab_index = active_pages.index(new_p)
