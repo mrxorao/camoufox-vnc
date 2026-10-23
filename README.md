@@ -103,6 +103,25 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |
+| `browse_fast(goal, url, max_steps)` | *(Optional, Jev 1.14)* Fast autonomous agent using pure TypeSafe Jev (~150ms/step). Strictly halts if blocked or budget reached without automatic LLM reasoning fallback. |
+
+---
+
+## ⚡ Fast Autonomous Mode (`browse_fast`)
+
+Powered by **TypeSafe Jev 1.14** via OpenRouter:
+1. **Indexed DOM Action Space:** Extracts all visible interactive controls atomically (`[1..N]`).
+2. **Fast Decisions:** Jev evaluates operations (`CLICK`, `FILL`, `SELECT`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) in ~150ms.
+3. **Selective Text Generation:** Calls `openai/gpt-6-luna` only when typing text into a field.
+4. **Mandatory Stop Rule:** If blocked or if a loop is detected, the agent immediately halts and awaits user instructions.
+
+### Configuration (`.env`)
+```bash
+ENABLE_JEV=true
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+JEV_MODEL=typesafe/jev-1.14
+JEV_TEXT_MODEL=openai/gpt-6-luna
+```
 
 ---
 
@@ -120,6 +139,10 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `AUTO_UPDATE` | Auto-update Camoufox on boot | `true` |
 | `START_URL` | Page opened on startup | `https://duckduckgo.com` |
 | `VNC_PASSWORD` | VNC access password (optional) | *(empty)* |
+| `ENABLE_JEV` | Enable TypeSafe Jev 1.14 Fast mode (`true`/`false`) | `false` |
+| `OPENROUTER_API_KEY` | OpenRouter API Key for Jev decisions | *(empty)* |
+| `JEV_MODEL` | Jev decision model identifier | `typesafe/jev-1.14` |
+| `JEV_TEXT_MODEL` | Text generation model for form fills | `openai/gpt-6-luna` |
 
 ---
 
