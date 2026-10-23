@@ -759,7 +759,11 @@ def main():
                                     time.sleep(0.3)
                                     result_holder["payload"] = {"status": "ok", "executed": action.get('id')}
                                 elif kind == 'wait':
-                                    time.sleep(0.4)
+                                    time.sleep(1.0)
+                                    try:
+                                        curr_page.wait_for_load_state('domcontentloaded', timeout=2000)
+                                    except Exception:
+                                        pass
                                     result_holder["payload"] = {"status": "ok", "executed": action.get('id')}
                                 else:
                                     target = curr_page.evaluate("""(action) => {

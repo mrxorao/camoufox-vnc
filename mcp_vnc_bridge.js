@@ -180,13 +180,22 @@ async function runFastAutonomousLoop(goal, options = {}) {
   const history = [];
   const startedAt = Date.now();
   let lastFingerprint = null;
+  let consecutiveWaits = 0;
 
   for (let step = 1; step <= maxSteps; step++) {
     let obsRes = await sendCmd("/observe_fast");
-    if (obsRes.error || !obsRes.state) {
-      await new Promise((r) => setTimeout(r, 600));
+    // Ensure the page has had a chance to render actual interactive elements
+    for (let retry = 0; retry < 6; retry++) {
+      if (obsRes?.state?.actions) {
+        const hasInteractive = obsRes.state.actions.some(
+          (a) => a.kind === "click" || a.kind === "fill" || a.kind === "select"
+        );
+        if (hasInteractive && obsRes.state.title) break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
       obsRes = await sendCmd("/observe_fast");
     }
+
     if (obsRes.error || !obsRes.state) {
       return {
         status: "error",
@@ -292,6 +301,31 @@ async function runFastAutonomousLoop(goal, options = {}) {
       };
     }
 
+    if (selectedOp === "WAIT") {
+      consecutiveWaits++;
+      if (consecutiveWaits > 4) {
+        history.push({
+          step,
+          engine: "jev",
+          operation: "WAIT",
+          action: "Max consecutive waits reached",
+          latency_ms: jevLatency,
+        });
+        return {
+          status: "blocked",
+          reason: "Fast mode reached the consecutive wait limit (page remained loading or unchanged after multiple wait cycles).",
+          goal,
+          steps_executed: step,
+          final_url: state.url,
+          history,
+          elapsed_ms: Date.now() - startedAt,
+          suggestion: "Use Normal Mode to inspect or complete the task.",
+        };
+      }
+    } else {
+      consecutiveWaits = 0;
+    }
+
     // Identify candidate target
     let targetAction = null;
     let targetIndex = null;
@@ -333,6 +367,7 @@ async function runFastAutonomousLoop(goal, options = {}) {
     const candidateActionName = targetAction ? targetAction.label || targetAction.id : null;
     const lastAction = history[history.length - 1];
     const isActionLoop = Boolean(
+      selectedOp !== "WAIT" &&
       lastAction &&
       candidateActionName &&
       lastAction.action === candidateActionName &&
@@ -391,10 +426,15 @@ async function runFastAutonomousLoop(goal, options = {}) {
       error: actRes.error || null,
     });
 
-    await waitForPageSettle({
-      operation: selectedOp,
-      action: targetAction.label || targetAction.id,
-    });
+    if (selectedOp === "WAIT") {
+      await new Promise((r) => setTimeout(r, 1000));
+      await waitForPageSettle(null, 2500);
+    } else {
+      await waitForPageSettle({
+        operation: selectedOp,
+        action: targetAction.label || targetAction.id,
+      });
+    }
   }
 
   return {
