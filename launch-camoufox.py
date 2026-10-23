@@ -630,10 +630,19 @@ def main():
                             launcher_page = curr_page
                             pages_before = set(browser.pages)
 
-                            try:
-                                launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
-                            except Exception as e:
-                                print(f"[Camoufox Navigate Warning]: {e}", flush=True)
+                            if is_container:
+                                try:
+                                    launcher_page.evaluate("(u) => { window.location.href = u; }", target_url)
+                                except Exception:
+                                    try:
+                                        launcher_page.goto(target_url, timeout=2500, wait_until="commit")
+                                    except Exception:
+                                        pass
+                            else:
+                                try:
+                                    launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
+                                except Exception as e:
+                                    print(f"[Camoufox Navigate Warning]: {e}", flush=True)
 
                             if is_container:
                                 container_page = None
