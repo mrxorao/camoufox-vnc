@@ -1,10 +1,10 @@
-# 🦊 Camoufox VNC & Camoufox MCP — Stealth Browser with Fast Jev Autonomous Engine
+# 🦊 Camoufox VNC & Camoufox MCP — Stealth Browser in Docker with Live noVNC & MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker Image](https://img.shields.io/badge/Docker-mrxorao%2Fcamoufox--vnc-blue.svg)](https://hub.docker.com/r/mrxorao/camoufox-vnc)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)
 
-**Camoufox VNC** meets **Camoufox MCP**: A self-contained, anti-detect Docker stealth browser environment combining live **noVNC** visual streaming (`:5800`), a native **Model Context Protocol (MCP)** server for AI coding agents, and the **Camoufox Fast Jev** autonomous decision engine (~150ms/step pure Jev 1.14).
+**Camoufox VNC** meets **Camoufox MCP**: A self-contained, anti-detect Docker stealth browser environment combining live **noVNC** visual streaming (`:5800`) and a native **Model Context Protocol (MCP)** server (14 tools) for AI coding agents (Claude, Cursor, Antigravity, OpenCode, Windsurf).
 
 ---
 
@@ -12,8 +12,7 @@
 
 * 🛡️ **Camoufox Anti-Detect Core:** C++ stealth Firefox fork with fingerprint spoofing (`navigator.webdriver = false`, WebGL, Canvas, Audio, GPU, font randomization).
 * 🌐 **Camoufox VNC (Live Visual Stream):** Watch every click, search, and navigation in real time directly in your browser on `http://localhost:5800` (auto-connects with zero clicks).
-* 🔌 **Camoufox MCP Server (15 Native Tools):** Complete control for AI agents (Cursor, Claude Desktop, Antigravity, OpenCode, Windsurf, LangChain) with navigation, typing, clicks, screenshots, tab management, file uploads and JS execution.
-* ⚡ **Camoufox Fast Jev (`browse_fast`):** Ultra-fast multi-step autonomous browsing powered by TypeSafe Jev 1.14 decisions (~150ms per step, zero LLM reasoning tokens).
+* 🔌 **Camoufox MCP Server (14 Native Tools):** Complete direct control for AI agents with navigation, typing, Bézier clicks, screenshots, tab management, file uploads and JS execution.
 * 🖱️ **Humanized Bézier Mouse Physics:** Smooth cubic Bézier mouse movement with variable acceleration and micro-jitter that bypasses bot movement detectors.
 * 📑 **Single-Window Tab Management:** Clean single-window tab workflow (`browse_new_tab`, `browse_tabs`, `browse_switch_tab`, `browse_close_tab`) preventing messy multi-window states.
 * 📎 **File Upload & Download Support:** Upload host files straight into `<input type='file'>` elements and keep downloads in `./data/downloads`.
@@ -109,24 +108,6 @@ Add to your MCP config file (`mcp_config.json` or `claude_desktop_config.json`):
 | `browse_tabs()` | List all open tabs. |
 | `browse_switch_tab(index)` | Switch between open tabs by index. |
 | `browse_evaluate(script)` | Execute JavaScript directly in the page context. |
-| `browse_fast(goal, url, max_steps)` | *(Optional, Jev 1.14)* Fast autonomous agent using pure TypeSafe Jev (~150ms/step). Strictly halts if blocked or budget reached without automatic LLM reasoning fallback. |
-
----
-
-## ⚡ Fast Autonomous Mode (`browse_fast`)
-
-Powered by **TypeSafe Jev 1.14** via OpenRouter:
-1. **Indexed DOM Action Space:** Extracts all visible interactive controls atomically (`[1..N]`).
-2. **Fast Decisions:** Jev evaluates operations (`CLICK`, `FILL`, `SELECT`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) in ~150ms.
-3. **Selective Text Generation:** Calls `openai/gpt-6-luna` only when typing text into a field.
-4. **Mandatory Stop Rule:** If blocked or if a loop is detected, the agent immediately halts and awaits user instructions.
-
-### Configuration (`.env`)
-```bash
-ENABLE_JEV=true
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-JEV_MODEL=typesafe/jev-1.14
-```
 
 ---
 
@@ -144,9 +125,6 @@ JEV_MODEL=typesafe/jev-1.14
 | `AUTO_UPDATE` | Auto-update Camoufox on boot | `true` |
 | `START_URL` | Page opened on startup | `https://duckduckgo.com` |
 | `VNC_PASSWORD` | VNC access password (optional) | *(empty)* |
-| `ENABLE_JEV` | Enable TypeSafe Jev 1.14 Fast mode (`true`/`false`) | `false` |
-| `OPENROUTER_API_KEY` | OpenRouter API Key for Jev decisions | *(empty)* |
-| `JEV_MODEL` | Jev decision model identifier | `typesafe/jev-1.14` |
 
 ---
 
