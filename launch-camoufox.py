@@ -269,9 +269,11 @@ def start_api_server(port=9377):
 
 def safe_get_title(page):
     try:
-        return page.title()
+        if page and not page.is_closed():
+            return page.title()
     except Exception:
-        return ""
+        pass
+    return ""
 
 def create_new_tab(browser, current_page, target_url="https://duckduckgo.com"):
     """
@@ -633,8 +635,11 @@ def main():
                             if is_container:
                                 container_page = None
                                 try:
-                                    with browser.expect_page(timeout=4500) as p_info:
-                                        launcher_page.evaluate("(u) => { setTimeout(() => { window.location.href = u; }, 10); }", target_url)
+                                    with browser.expect_page(timeout=10000) as p_info:
+                                        try:
+                                            launcher_page.goto(target_url, timeout=10000, wait_until="commit")
+                                        except Exception:
+                                            pass
                                     container_page = p_info.value
                                 except Exception as e_exp:
                                     print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
@@ -645,7 +650,7 @@ def main():
                                         container_page = candidates[-1]
 
                                 if container_page:
-                                    print(f"[Camoufox Container] Successfully captured new container tab: {container_page.url}", flush=True)
+                                    print(f"[Camoufox Container] Successfully captured container tab: {container_page.url}", flush=True)
                                     try:
                                         if launcher_page != container_page and not launcher_page.is_closed():
                                             launcher_page.close()
