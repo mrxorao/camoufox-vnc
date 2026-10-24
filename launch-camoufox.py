@@ -632,12 +632,9 @@ def main():
 
                             if is_container:
                                 try:
-                                    launcher_page.evaluate("(u) => { window.location.href = u; }", target_url)
-                                except Exception:
-                                    try:
-                                        launcher_page.goto(target_url, timeout=2500, wait_until="commit")
-                                    except Exception:
-                                        pass
+                                    launcher_page.evaluate("(u) => { setTimeout(() => { window.location.href = u; }, 10); }", target_url)
+                                except Exception as e_nav:
+                                    print(f"[Camoufox Container Nav Error]: {e_nav}", flush=True)
                             else:
                                 try:
                                     launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
