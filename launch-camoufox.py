@@ -415,7 +415,7 @@ def ensure_container_juggler_support():
                 namelist = zin.namelist()
                 if "chrome/juggler/content/TargetRegistry.js" in namelist:
                     data = zin.read("chrome/juggler/content/TargetRegistry.js").decode("utf-8")
-                    if "this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext" not in data:
+                    if "[JUGGLER DUMP]" not in data:
                         needs_patch = True
                 if "chrome/juggler/content/protocol/BrowserHandler.js" in namelist:
                     b_data = zin.read("chrome/juggler/content/protocol/BrowserHandler.js").decode("utf-8")
@@ -437,8 +437,8 @@ def ensure_container_juggler_support():
                         file_data = zin.read(item.filename)
                         if item.filename == "chrome/juggler/content/TargetRegistry.js":
                             text = file_data.decode("utf-8")
-                            old_const = "const browserContext = this._userContextIdToBrowserContext.get(userContextId);"
-                            new_const = "const browserContext = this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);"
+                            old_const = "const userContextId = tab.userContextId;\n      const browserContext = this._userContextIdToBrowserContext.get(userContextId);"
+                            new_const = 'const userContextId = tab.userContextId;\n      dump("[JUGGLER DUMP] onTabOpen userContextId=" + userContextId + "\\n");\n      const browserContext = this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);'
                             old_err1 = "if (!browserContext)\n        throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);"
                             old_err2 = "if (!browserContext)\n        browserContext = this._defaultContext || this._userContextIdToBrowserContext.get(0);"
                             old_err3 = "if (!browserContext)\n        browserContext = this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
