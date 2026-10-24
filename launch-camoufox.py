@@ -382,6 +382,12 @@ def cleanup_profile_locks(profile_dir):
                         print(f"[Camoufox] Removed stale lock: {lock_file}", flush=True)
                 except Exception:
                     pass
+
+        sc_dir = os.path.join(profile_dir, "startupCache")
+        if os.path.exists(sc_dir):
+            import shutil
+            shutil.rmtree(sc_dir, ignore_errors=True)
+            print(f"[Camoufox] Cleared startupCache to reload updated browser scripts", flush=True)
     except Exception as e:
         print(f"[Camoufox] Warning while cleaning locks: {e}", flush=True)
 
@@ -458,7 +464,8 @@ def ensure_container_juggler_support():
                             file_data = text.encode("utf-8")
                         zout.writestr(item, file_data)
             shutil.move(tmp_path, omni_path)
-            print(f"[Camoufox Container Support] Successfully activated container automation support!", flush=True)
+            shutil.rmtree("/root/profile/startupCache", ignore_errors=True)
+            print(f"[Camoufox Container Support] Successfully activated container automation support! Cleared startupCache.", flush=True)
         except Exception as e:
             print(f"[Camoufox Container Support Warning] Could not patch {omni_path}: {e}", flush=True)
 
@@ -502,6 +509,7 @@ def main():
 
     # Firefox preferences for DuckDuckGo and Multi-Account Containers
     firefox_prefs = {
+        "browser.dom.window.dump.enabled": True,
         "browser.startup.homepage": "https://duckduckgo.com",
         "browser.startup.page": 1,
         "browser.search.defaultenginename": "DuckDuckGo",
