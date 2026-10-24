@@ -387,9 +387,9 @@ def cleanup_profile_locks(profile_dir):
 
 def ensure_container_juggler_support():
     """
-    Patches Firefox Juggler's TargetRegistry.js inside omni.ja so that tabs
+    Patches Firefox Juggler's TargetRegistry.js and BrowserHandler.js inside omni.ja so that tabs
     opened in container contexts (e.g. Multi-Account Containers for Portugal/Brasil proxies)
-    fall back to the default automation context instead of throwing an unhandled exception.
+    fall back to the default automation context and attach to Juggler sessions.
     This guarantees full Playwright / MCP control over container tabs.
     Runs automatically on startup, making it 100% persistent across any Camoufox browser updates.
     """
@@ -412,9 +412,14 @@ def ensure_container_juggler_support():
                 continue
             needs_patch = False
             with zipfile.ZipFile(omni_path, "r") as zin:
-                if "chrome/juggler/content/TargetRegistry.js" in zin.namelist():
+                namelist = zin.namelist()
+                if "chrome/juggler/content/TargetRegistry.js" in namelist:
                     data = zin.read("chrome/juggler/content/TargetRegistry.js").decode("utf-8")
                     if "cannot find context for userContextId=" in data:
+                        needs_patch = True
+                if "chrome/juggler/content/protocol/BrowserHandler.js" in namelist:
+                    b_data = zin.read("chrome/juggler/content/protocol/BrowserHandler.js").decode("utf-8")
+                    if "_shouldAttachToTarget(target) {\n    if (this._createdBrowserContextIds" in b_data:
                         needs_patch = True
 
             if not needs_patch:
@@ -433,10 +438,16 @@ def ensure_container_juggler_support():
                         if item.filename == "chrome/juggler/content/TargetRegistry.js":
                             text = file_data.decode("utf-8")
                             old_code = "if (!browserContext)\n        throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);"
-                            new_code = "if (!browserContext)\n        browserContext = this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
+                            new_code = "if (!browserContext)\n        browserContext = this._defaultContext || this._userContextIdToBrowserContext.get(0);"
                             old_net = "return this._userContextIdToBrowserContext.get(userContextId);"
-                            new_net = "return this._userContextIdToBrowserContext.get(userContextId) || this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
+                            new_net = "return this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);"
                             text = text.replace(old_code, new_code).replace(old_net, new_net)
+                            file_data = text.encode("utf-8")
+                        elif item.filename == "chrome/juggler/content/protocol/BrowserHandler.js":
+                            text = file_data.decode("utf-8")
+                            old_should = "_shouldAttachToTarget(target) {\n    if (this._createdBrowserContextIds"
+                            new_should = "_shouldAttachToTarget(target) {\n    return true;\n    if (this._createdBrowserContextIds"
+                            text = text.replace(old_should, new_should)
                             file_data = text.encode("utf-8")
                         zout.writestr(item, file_data)
             shutil.move(tmp_path, omni_path)
