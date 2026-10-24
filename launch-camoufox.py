@@ -268,12 +268,35 @@ def start_api_server(port=9377):
     return server
 
 def safe_get_title(page):
+    if not page:
+        return ""
     try:
-        if page and not page.is_closed():
-            return page.title()
+        if page.is_closed():
+            return ""
+        title_loc = page.locator("title")
+        return title_loc.first.inner_text(timeout=500)
     except Exception:
-        pass
-    return ""
+        try:
+            if not page.is_closed():
+                return page.title()
+        except Exception:
+            pass
+        return ""
+
+def safe_get_text(page):
+    if not page:
+        return ""
+    try:
+        if page.is_closed():
+            return ""
+        body_loc = page.locator("body")
+        return body_loc.inner_text(timeout=3000)
+    except Exception:
+        try:
+            return page.evaluate("() => document.body ? document.body.innerText : ''")
+        except Exception:
+            pass
+        return ""
 
 def create_new_tab(browser, current_page, target_url="https://duckduckgo.com"):
     """
@@ -635,9 +658,9 @@ def main():
                             if is_container:
                                 container_page = None
                                 try:
-                                    with browser.expect_page(timeout=10000) as p_info:
+                                    with browser.expect_page(timeout=5000) as p_info:
                                         try:
-                                            launcher_page.goto(target_url, timeout=10000, wait_until="commit")
+                                            launcher_page.goto(target_url, timeout=4000, wait_until="commit")
                                         except Exception:
                                             pass
                                     container_page = p_info.value
@@ -645,15 +668,21 @@ def main():
                                     print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
 
                                 if not container_page:
-                                    candidates = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
-                                    if candidates:
-                                        container_page = candidates[-1]
+                                    for _ in range(5):
+                                        candidates = [p for p in browser.pages if p != launcher_page and not p.is_closed()]
+                                        if candidates:
+                                            container_page = candidates[-1]
+                                            break
+                                        try:
+                                            launcher_page.wait_for_timeout(500)
+                                        except Exception:
+                                            time.sleep(0.5)
 
                                 if container_page:
                                     print(f"[Camoufox Container] Successfully captured container tab: {container_page.url}", flush=True)
                                     try:
                                         if launcher_page != container_page and not launcher_page.is_closed():
-                                            launcher_page.close()
+                                            launcher_page.close(run_before_unload=False)
                                     except Exception as e_close:
                                         print(f"[Camoufox Container Warning] Failed to close launcher tab: {e_close}", flush=True)
 
@@ -669,9 +698,11 @@ def main():
                                         pass
 
                                     try:
-                                        curr_page.wait_for_load_state("domcontentloaded", timeout=6000)
+                                        curr_page.wait_for_load_state("domcontentloaded", timeout=10000)
                                     except Exception:
                                         pass
+                                else:
+                                    print("[Camoufox Container Warning] No container tab found, staying on launcher page", flush=True)
                             else:
                                 try:
                                     launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
@@ -690,18 +721,7 @@ def main():
                             }
 
                     elif endpoint == '/snapshot':
-                        text = ""
-                        try:
-                            body_loc = curr_page.locator("body")
-                            if body_loc.count() > 0:
-                                text = body_loc.first.inner_text(timeout=4000)
-                            else:
-                                text = curr_page.evaluate("() => document.body ? document.body.innerText : ''")
-                        except Exception:
-                            try:
-                                text = curr_page.evaluate("() => document.body ? document.body.innerText : ''")
-                            except Exception:
-                                pass
+                        text = safe_get_text(curr_page)
                         page_title = safe_get_title(curr_page)
                         result_holder["payload"] = {
                             "status": "ok",
