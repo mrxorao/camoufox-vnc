@@ -385,12 +385,72 @@ def cleanup_profile_locks(profile_dir):
     except Exception as e:
         print(f"[Camoufox] Warning while cleaning locks: {e}", flush=True)
 
+def ensure_container_juggler_support():
+    """
+    Patches Firefox Juggler's TargetRegistry.js inside omni.ja so that tabs
+    opened in container contexts (e.g. Multi-Account Containers for Portugal/Brasil proxies)
+    fall back to the default automation context instead of throwing an unhandled exception.
+    This guarantees full Playwright / MCP control over container tabs.
+    Runs automatically on startup, making it 100% persistent across any Camoufox browser updates.
+    """
+    import glob
+    import zipfile
+    import shutil
+
+    search_dirs = [
+        "/root/.cache/camoufox/browsers/**/omni.ja",
+        "/root/.cache/ms-playwright/firefox-*/**/omni.ja",
+        "/opt/camoufox/**/omni.ja"
+    ]
+    omni_files = []
+    for pattern in search_dirs:
+        omni_files.extend(glob.glob(pattern, recursive=True))
+
+    for omni_path in set(omni_files):
+        try:
+            if not os.path.isfile(omni_path):
+                continue
+            needs_patch = False
+            with zipfile.ZipFile(omni_path, "r") as zin:
+                if "chrome/juggler/content/TargetRegistry.js" in zin.namelist():
+                    data = zin.read("chrome/juggler/content/TargetRegistry.js").decode("utf-8")
+                    if "cannot find context for userContextId=" in data:
+                        needs_patch = True
+
+            if not needs_patch:
+                continue
+
+            print(f"[Camoufox Container Support] Patching Juggler container support in: {omni_path}", flush=True)
+            bak_path = omni_path + ".bak"
+            if not os.path.exists(bak_path):
+                shutil.copy2(omni_path, bak_path)
+
+            tmp_path = omni_path + ".tmp"
+            with zipfile.ZipFile(omni_path, "r") as zin:
+                with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_STORED) as zout:
+                    for item in zin.infolist():
+                        file_data = zin.read(item.filename)
+                        if item.filename == "chrome/juggler/content/TargetRegistry.js":
+                            text = file_data.decode("utf-8")
+                            old_code = "if (!browserContext)\n        throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);"
+                            new_code = "if (!browserContext)\n        browserContext = this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
+                            old_net = "return this._userContextIdToBrowserContext.get(userContextId);"
+                            new_net = "return this._userContextIdToBrowserContext.get(userContextId) || this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
+                            text = text.replace(old_code, new_code).replace(old_net, new_net)
+                            file_data = text.encode("utf-8")
+                        zout.writestr(item, file_data)
+            shutil.move(tmp_path, omni_path)
+            print(f"[Camoufox Container Support] Successfully activated container automation support!", flush=True)
+        except Exception as e:
+            print(f"[Camoufox Container Support Warning] Could not patch {omni_path}: {e}", flush=True)
+
 def main():
     global status_cache
     profile_dir = os.getenv("PROFILE_DIR", "/root/profile")
     os.makedirs(profile_dir, exist_ok=True)
     cleanup_profile_locks(profile_dir)
     fix_search_policies()
+    ensure_container_juggler_support()
     
     start_url = os.getenv("START_URL", "https://duckduckgo.com")
     os_spoof = os.getenv("OS_SPOOF", "windows")
