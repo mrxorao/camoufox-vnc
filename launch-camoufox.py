@@ -283,13 +283,8 @@ def safe_get_text(page):
     try:
         if page.is_closed():
             return ""
-        body_loc = page.locator("body")
-        return body_loc.inner_text(timeout=3000)
+        return page.locator("body").inner_text(timeout=3000)
     except Exception:
-        try:
-            return page.evaluate("() => document.body ? document.body.innerText : ''")
-        except Exception:
-            pass
         return ""
 
 def create_new_tab(browser, current_page, target_url="https://duckduckgo.com"):
