@@ -415,7 +415,7 @@ def ensure_container_juggler_support():
                 namelist = zin.namelist()
                 if "chrome/juggler/content/TargetRegistry.js" in namelist:
                     data = zin.read("chrome/juggler/content/TargetRegistry.js").decode("utf-8")
-                    if "cannot find context for userContextId=" in data:
+                    if "this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext" not in data:
                         needs_patch = True
                 if "chrome/juggler/content/protocol/BrowserHandler.js" in namelist:
                     b_data = zin.read("chrome/juggler/content/protocol/BrowserHandler.js").decode("utf-8")
@@ -437,11 +437,18 @@ def ensure_container_juggler_support():
                         file_data = zin.read(item.filename)
                         if item.filename == "chrome/juggler/content/TargetRegistry.js":
                             text = file_data.decode("utf-8")
-                            old_code = "if (!browserContext)\n        throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);"
-                            new_code = "if (!browserContext)\n        browserContext = this._defaultContext || this._userContextIdToBrowserContext.get(0);"
+                            old_const = "const browserContext = this._userContextIdToBrowserContext.get(userContextId);"
+                            new_const = "const browserContext = this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);"
+                            old_err1 = "if (!browserContext)\n        throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);"
+                            old_err2 = "if (!browserContext)\n        browserContext = this._defaultContext || this._userContextIdToBrowserContext.get(0);"
+                            old_err3 = "if (!browserContext)\n        browserContext = this._userContextIdToBrowserContext.get(0) || this._defaultContext;"
                             old_net = "return this._userContextIdToBrowserContext.get(userContextId);"
                             new_net = "return this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);"
-                            text = text.replace(old_code, new_code).replace(old_net, new_net)
+                            text = text.replace(old_const, new_const)
+                            text = text.replace(old_err1, "// container resolved")
+                            text = text.replace(old_err2, "// container resolved")
+                            text = text.replace(old_err3, "// container resolved")
+                            text = text.replace(old_net, new_net)
                             file_data = text.encode("utf-8")
                         elif item.filename == "chrome/juggler/content/protocol/BrowserHandler.js":
                             text = file_data.decode("utf-8")
