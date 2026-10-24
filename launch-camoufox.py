@@ -631,28 +631,21 @@ def main():
                             pages_before = set(browser.pages)
 
                             if is_container:
-                                try:
-                                    launcher_page.evaluate("(u) => { setTimeout(() => { window.location.href = u; }, 10); }", target_url)
-                                except Exception as e_nav:
-                                    print(f"[Camoufox Container Nav Error]: {e_nav}", flush=True)
-                            else:
-                                try:
-                                    launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
-                                except Exception as e:
-                                    print(f"[Camoufox Navigate Warning]: {e}", flush=True)
-
-                            if is_container:
                                 container_page = None
-                                start_wait = time.time()
-                                while time.time() - start_wait < 5.0:
+                                try:
+                                    with browser.expect_page(timeout=4500) as p_info:
+                                        launcher_page.evaluate("(u) => { setTimeout(() => { window.location.href = u; }, 10); }", target_url)
+                                    container_page = p_info.value
+                                except Exception as e_exp:
+                                    print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
+
+                                if not container_page:
                                     candidates = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
                                     if candidates:
                                         container_page = candidates[-1]
-                                        break
-                                    time.sleep(0.15)
 
                                 if container_page:
-                                    print(f"[Camoufox Container] Detected new container tab: {container_page.url}", flush=True)
+                                    print(f"[Camoufox Container] Successfully captured new container tab: {container_page.url}", flush=True)
                                     try:
                                         if launcher_page != container_page and not launcher_page.is_closed():
                                             launcher_page.close()
@@ -671,9 +664,14 @@ def main():
                                         pass
 
                                     try:
-                                        curr_page.wait_for_load_state("domcontentloaded", timeout=8000)
+                                        curr_page.wait_for_load_state("domcontentloaded", timeout=6000)
                                     except Exception:
                                         pass
+                            else:
+                                try:
+                                    launcher_page.goto(target_url, timeout=timeout, wait_until="commit")
+                                except Exception as e:
+                                    print(f"[Camoufox Navigate Warning]: {e}", flush=True)
                             
                             page_title = safe_get_title(curr_page)
                             status_cache["url"] = curr_page.url
