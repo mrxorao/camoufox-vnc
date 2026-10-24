@@ -273,14 +273,8 @@ def safe_get_title(page):
     try:
         if page.is_closed():
             return ""
-        title_loc = page.locator("title")
-        return title_loc.first.inner_text(timeout=500)
+        return page.locator("title").first.inner_text(timeout=500)
     except Exception:
-        try:
-            if not page.is_closed():
-                return page.title()
-        except Exception:
-            pass
         return ""
 
 def safe_get_text(page):
@@ -658,9 +652,9 @@ def main():
                             if is_container:
                                 container_page = None
                                 try:
-                                    with browser.expect_page(timeout=5000) as p_info:
+                                    with browser.expect_page(timeout=15000) as p_info:
                                         try:
-                                            launcher_page.goto(target_url, timeout=4000, wait_until="commit")
+                                            launcher_page.goto(target_url, timeout=3000, wait_until="commit")
                                         except Exception:
                                             pass
                                     container_page = p_info.value
@@ -668,13 +662,16 @@ def main():
                                     print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
 
                                 if not container_page:
-                                    for _ in range(5):
+                                    for _ in range(8):
                                         candidates = [p for p in browser.pages if p != launcher_page and not p.is_closed()]
                                         if candidates:
                                             container_page = candidates[-1]
                                             break
                                         try:
-                                            launcher_page.wait_for_timeout(500)
+                                            if not launcher_page.is_closed():
+                                                launcher_page.wait_for_timeout(500)
+                                            else:
+                                                time.sleep(0.5)
                                         except Exception:
                                             time.sleep(0.5)
 
@@ -698,7 +695,7 @@ def main():
                                         pass
 
                                     try:
-                                        curr_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                                        curr_page.wait_for_load_state("domcontentloaded", timeout=15000)
                                     except Exception:
                                         pass
                                 else:
