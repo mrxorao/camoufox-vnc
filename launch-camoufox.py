@@ -926,6 +926,40 @@ def main():
                             if active_tab_index >= len(active_pages):
                                 active_tab_index = len(active_pages) - 1
                             curr_page = active_pages[active_tab_index]
+                            if endpoint == '/navigate' and isinstance(data, dict) and data.get('url'):
+                                raw_u = str(data.get('url')).strip()
+                                if not raw_u.startswith("http://") and not raw_u.startswith("https://"):
+                                    raw_u = "https://" + raw_u
+                                try:
+                                    from urllib.parse import urlparse
+                                    t_dom = urlparse(raw_u).netloc.lower().lstrip("www.")
+                                    c_dom = urlparse(curr_page.url or "").netloc.lower().lstrip("www.")
+                                except Exception:
+                                    t_dom, c_dom = "", ""
+                                now_ts = time.time()
+                                owned_pages = set(session_tabs.values())
+                                _, c_last_ts = page_last_touch.get(curr_page, (None, 0.0))
+                                c_busy = (curr_page in owned_pages) or (c_last_ts > 0 and (now_ts - c_last_ts <= 180.0))
+                                if c_busy and c_dom and t_dom and c_dom != t_dom:
+                                    chosen_p = None
+                                    for cand_p in active_pages:
+                                        if cand_p in owned_pages:
+                                            continue
+                                        _, cand_ts = page_last_touch.get(cand_p, (None, 0.0))
+                                        try:
+                                            cand_dom = urlparse(cand_p.url or "").netloc.lower().lstrip("www.")
+                                        except Exception:
+                                            cand_dom = ""
+                                        if cand_p.url in ("", "about:blank") or (cand_ts == 0.0) or (now_ts - cand_ts > 180.0):
+                                            chosen_p = cand_p
+                                            break
+                                    if chosen_p is None:
+                                        chosen_p = create_new_tab(browser, curr_page, "about:blank")
+                                        active_pages = [p for p in browser.pages if not p.is_closed()]
+                                        if chosen_p not in active_pages:
+                                            chosen_p = active_pages[-1]
+                                    curr_page = chosen_p
+                                    active_tab_index = active_pages.index(curr_page)
 
                         if curr_page != prev_page and endpoint not in ('/tabs', '/downloads', '/list_downloads', '/get_download'):
                             try:

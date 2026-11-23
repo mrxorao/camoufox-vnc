@@ -363,7 +363,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return { isError: true, content: [{ type: "text", text: `Failed to open in new tab: ${res.error}` }] };
           }
           return {
-            content: [{ type: "text", text: `🌐 ${tabTag(res)}Opened in new tab (index ${res.tab_index}): ${res.url}` }],
+            content: [{ type: "text", text: `🌐 ${tabTag(res)}Opened in new tab (index ${res.tab_index}): ${res.url} (IMPORTANT: pass tab_index: ${res.tab_index} in all subsequent tool calls for this page)` }],
           };
         } else {
           const res = await sendCmd("/navigate", withTabIsolation({ url: targetUrl }, args));
@@ -371,7 +371,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
           }
           return {
-            content: [{ type: "text", text: `🌐 ${tabTag(res)}Navigated to: ${res.url}` }],
+            content: [{ type: "text", text: `🌐 ${tabTag(res)}Navigated to: ${res.url} (IMPORTANT: pass tab_index: ${res.tab_index} in all subsequent tool calls for this page)` }],
           };
         }
       }
@@ -382,7 +382,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
         }
         return {
-          content: [{ type: "text", text: `${tabTag(res)}Navigated to: ${res.url}` }],
+          content: [{ type: "text", text: `${tabTag(res)}Navigated to: ${res.url} (IMPORTANT: pass tab_index: ${res.tab_index} in all subsequent tool calls for this page)` }],
         };
       }
 
