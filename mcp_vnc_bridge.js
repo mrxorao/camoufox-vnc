@@ -43,21 +43,48 @@ const CAMOUFOX_API_URL = rawHost.startsWith("http://") || rawHost.startsWith("ht
   ? rawHost.replace(/\/$/, "")
   : `http://${rawHost.replace(/\/$/, "")}`;
 
+const CLIENT_ID = process.env.CAMOUFOX_CLIENT_ID ||
+  `mcp-${process.env.USER || process.env.USERNAME || "client"}-${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
+
+// Local serialization queue so that concurrent tool calls inside the same MCP client are sent sequentially (1 at a time)
+let localQueue = Promise.resolve();
+function runExclusive(fn) {
+  const next = localQueue.then(fn, fn);
+  localQueue = next;
+  return next;
+}
+
 async function sendCmd(endpoint, data = null, method = "POST") {
   const url = `${CAMOUFOX_API_URL}${endpoint}`;
   const options = {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-MCP-Client-Id": CLIENT_ID,
+    },
   };
   if (data !== null) {
     options.body = JSON.stringify(data);
   }
 
+  const timeoutMs = Number(process.env.CAMOUFOX_TIMEOUT_MS || 130000);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  options.signal = controller.signal;
+
   try {
     const res = await fetch(url, options);
+    clearTimeout(timeoutId);
     const json = await res.json();
+    if (!res.ok && json && json.error) {
+      return { error: json.error, status: json.status || res.status };
+    }
     return json;
   } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      return { error: `Request timed out waiting for Camoufox lock / completion (${CAMOUFOX_API_URL})` };
+    }
     return { error: `Failed to reach the Camoufox container (${CAMOUFOX_API_URL}): ${err.message}` };
   }
 }
@@ -118,6 +145,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "browse_move",
+        description: "Move the mouse cursor smoothly to coordinates (x, y) or to a CSS selector with realistic human Bézier motion (hovering).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector of the element to move/hover to (optional if x,y provided)" },
+            x: { type: "number", description: "X coordinate in pixels (optional alternative to selector)" },
+            y: { type: "number", description: "Y coordinate in pixels (optional alternative to selector)" },
+          },
+        },
+      },
+      {
+        name: "browse_drag_and_drop",
+        description: "Drag and drop an element or coordinate to another element or coordinate with smooth human mouse physics.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            source_selector: { type: "string", description: "CSS selector of the element to drag (or use source_x, source_y)" },
+            target_selector: { type: "string", description: "CSS selector of the drop target (or use target_x, target_y)" },
+            source_x: { type: "number", description: "Start X coordinate in pixels" },
+            source_y: { type: "number", description: "Start Y coordinate in pixels" },
+            target_x: { type: "number", description: "Target X coordinate in pixels" },
+            target_y: { type: "number", description: "Target Y coordinate in pixels" },
+          },
+        },
+      },
+      {
         name: "browse_type",
         description: "Type text into an input or search field visible in the noVNC browser.",
         inputSchema: {
@@ -140,6 +194,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             file_path: { type: "string", description: "Absolute file path on the host (e.g. '/home/user/document.pdf')" },
           },
           required: ["selector", "file_path"],
+        },
+      },
+      {
+        name: "browse_list_downloads",
+        description: "List all files downloaded by the browser in the downloads directory, including file name, size and modification time.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "browse_get_download",
+        description: "Retrieve a downloaded file from the Camoufox browser (useful when Docker runs on a remote VPS). Can save to a local path or return Base64.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            filename: { type: "string", description: "Name of the file to retrieve (as listed by browse_list_downloads)" },
+            save_path: { type: "string", description: "Optional local destination file path on your machine where to save the downloaded file" },
+          },
+          required: ["filename"],
         },
       },
       {
@@ -221,9 +292,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  return runExclusive(async () => {
+    const { name, arguments: args } = request.params;
 
-  try {
+    try {
     if (name === "browse") {
       let targetUrl = (args.url || "https://duckduckgo.com").trim();
       if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
@@ -297,6 +369,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    if (name === "browse_move") {
+      const payload = {};
+      if (args.selector) payload.selector = args.selector;
+      if (args.x !== undefined) payload.x = Number(args.x);
+      if (args.y !== undefined) payload.y = Number(args.y);
+
+      if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Either 'selector' or both 'x' and 'y' coordinates must be provided." }],
+        };
+      }
+
+      const res = await sendCmd("/move", payload);
+      if (res.error) {
+        return { isError: true, content: [{ type: "text", text: `Move failed: ${res.error}` }] };
+      }
+      const targetDesc = payload.selector ? `'${payload.selector}'` : `(${payload.x}, ${payload.y})`;
+      return {
+        content: [{ type: "text", text: `🖱️ Mouse cursor smoothly moved to ${targetDesc}.` }],
+      };
+    }
+
+    if (name === "browse_drag_and_drop") {
+      const payload = {};
+      if (args.source_selector) payload.source_selector = args.source_selector;
+      if (args.target_selector) payload.target_selector = args.target_selector;
+      if (args.source_x !== undefined) payload.source_x = Number(args.source_x);
+      if (args.source_y !== undefined) payload.source_y = Number(args.source_y);
+      if (args.target_x !== undefined) payload.target_x = Number(args.target_x);
+      if (args.target_y !== undefined) payload.target_y = Number(args.target_y);
+
+      const hasSource = payload.source_selector || (payload.source_x !== undefined && payload.source_y !== undefined);
+      const hasTarget = payload.target_selector || (payload.target_x !== undefined && payload.target_y !== undefined);
+
+      if (!hasSource || !hasTarget) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Both source (selector or x,y) and target (selector or x,y) must be provided for drag and drop." }],
+        };
+      }
+
+      const res = await sendCmd("/drag_and_drop", payload);
+      if (res.error) {
+        return { isError: true, content: [{ type: "text", text: `Drag and drop failed: ${res.error}` }] };
+      }
+      const fromDesc = res.from ? `(${res.from.x}, ${res.from.y})` : payload.source_selector;
+      const toDesc = res.to ? `(${res.to.x}, ${res.to.y})` : payload.target_selector;
+      return {
+        content: [{ type: "text", text: `🖱️ Successfully dragged from ${fromDesc} to ${toDesc}.` }],
+      };
+    }
+
     if (name === "browse_type") {
       const res = await sendCmd("/type", {
         selector: args.selector,
@@ -333,6 +458,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       return {
         content: [{ type: "text", text: `📎 File '${filename}' (${(fileBuffer.length / 1024).toFixed(1)} KB) successfully uploaded to '${args.selector}'.` }],
+      };
+    }
+
+    if (name === "browse_list_downloads") {
+      const res = await sendCmd("/downloads");
+      if (res.error) {
+        return { isError: true, content: [{ type: "text", text: `Failed to list downloads: ${res.error}` }] };
+        }
+      if (!res.files || res.files.length === 0) {
+        return {
+          content: [{ type: "text", text: `📠 No downloaded files found in ${res.downloads_dir || "/data/downloads"}.` }],
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.files, null, 2) }],
+      };
+    }
+
+    if (name === "browse_get_download") {
+      const filename = args.filename;
+      const res = await sendCmd("/get_download", { filename });
+      if (res.error) {
+        return { isError: true, content: [{ type: "text", text: `Failed to get download '${filename}': ${res.error}` }] };
+      }
+
+      if (args.save_path) {
+        try {
+          const savePath = path.resolve(args.save_path);
+          fs.mkdirSync(path.dirname(savePath), { recursive: true });
+          const fileBuf = Buffer.from(res.base64_data, "base64");
+          fs.writeFileSync(savePath, fileBuf);
+          return {
+            content: [{ type: "text", text: `💾 Downloaded file '${filename}' (${(res.size_bytes / 1024).toFixed(1)} KB) successfully saved locally to: ${savePath}` }],
+          };
+        } catch (saveErr) {
+          return { isError: true, content: [{ type: "text", text: `Failed to write file locally: ${saveErr.message}` }] };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `📄 File: ${res.filename} (${(res.size_bytes / 1024).toFixed(1)} KB)\nBase64 length: ${res.base64_data.length} chars`,
+          },
+        ],
       };
     }
 
@@ -425,7 +596,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "browse_switch_tab") {
       const res = await sendCmd("/switch_tab", { index: args.index });
       if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to switch tab: ${res.error}` }] };
+        return { isError: true, content: [{ type: "text", text: `Failed to switch_tab: ${res.error}` }] };
       }
       return {
         content: [{ type: "text", text: `Active tab switched to index ${args.index}: ${res.url} (${res.title})` }],
@@ -439,6 +610,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: "text", text: `Error processing ${name}: ${err.message}` }],
     };
   }
+  });
 });
 
 const transport = new StdioServerTransport();

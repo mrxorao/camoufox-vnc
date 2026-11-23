@@ -78,6 +78,9 @@ class HumanMouse:
         self.last_x = target_x
         self.last_y = target_y
 
+    def move(self, page, x, y):
+        self.smooth_move(page, x, y)
+
     def click(self, page, x, y, button="left", click_count=1):
         self.smooth_move(page, x, y)
         time.sleep(random.uniform(0.03, 0.08))
@@ -91,7 +94,41 @@ class HumanMouse:
             if click_count > 1:
                 time.sleep(0.05)
 
+    def drag_and_drop(self, page, start_x, start_y, end_x, end_y, button="left"):
+        # 1. Smoothly move to start coordinates
+        self.smooth_move(page, start_x, start_y)
+        time.sleep(random.uniform(0.06, 0.12))
+        # 2. Press mouse button down
+        page.mouse.down(button=button)
+        time.sleep(random.uniform(0.08, 0.15))
+        # 3. Smooth drag with bezier movement under load
+        points = self.bezier_curve((start_x, start_y), (end_x, end_y))
+        for px, py in points:
+            try:
+                page.mouse.move(px, py)
+            except Exception:
+                pass
+            time.sleep(random.uniform(0.008, 0.020))
+        self.last_x = end_x
+        self.last_y = end_y
+        time.sleep(random.uniform(0.08, 0.15))
+        # 4. Release mouse button at destination
+        page.mouse.up(button=button)
+        time.sleep(random.uniform(0.05, 0.10))
+
 human_mouse = HumanMouse()
+
+def get_element_coords(page, selector):
+    try:
+        loc = page.locator(selector).first
+        box = loc.bounding_box(timeout=8000)
+        if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
+            tx = box['x'] + box['width'] * random.uniform(0.3, 0.7)
+            ty = box['y'] + box['height'] * random.uniform(0.3, 0.7)
+            return round(tx, 1), round(ty, 1)
+    except Exception:
+        pass
+    return None, None
 
 SNAPSHOT_JS = r"""(() => {
   if (!document.body) return null;
@@ -200,13 +237,34 @@ SNAPSHOT_JS = r"""(() => {
     scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
 })()"""
 
+class CommandRequest:
+    """Represents a queued command from an MCP client awaiting exclusive access."""
+    def __init__(self, endpoint, data, client_id="anonymous", queue_timeout=120.0, exec_timeout=60.0):
+        self.id = str(random.randint(100000, 999999))
+        self.endpoint = endpoint
+        self.data = data
+        self.client_id = client_id
+        self.created_at = time.time()
+        self.started_at = None
+        self.finished_at = None
+        self.started_event = threading.Event()
+        self.done_event = threading.Event()
+        self.cancelled = threading.Event()
+        self.result_holder = {}
+        self.queue_timeout = queue_timeout
+        self.exec_timeout = exec_timeout
+
 command_queue = queue.Queue()
 status_cache = {
     "status": "starting",
     "browser": "camoufox",
     "url": "",
     "title": "",
-    "tabs_count": 0
+    "tabs_count": 0,
+    "is_busy": False,
+    "active_client": None,
+    "active_command": None,
+    "queue_length": 0
 }
 
 class CamoufoxAPIHandler(BaseHTTPRequestHandler):
@@ -218,7 +276,7 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-MCP-Client-Id')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
@@ -226,7 +284,7 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-MCP-Client-Id')
         self.end_headers()
 
     def _read_body(self):
@@ -240,24 +298,55 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
         return {}
 
     def do_GET(self):
-        if self.path == '/health' or self.path == '/':
-            return self._send_json(status_cache)
+        if self.path in ('/health', '/', '/status'):
+            status_copy = dict(status_cache)
+            status_copy["queue_length"] = command_queue.qsize()
+            return self._send_json(status_copy)
         self._send_json({"error": "Endpoint not found"}, 404)
 
     def do_POST(self):
         data = self._read_body()
         endpoint = self.path
+        client_id = self.headers.get('X-MCP-Client-Id') or data.get('_client_id')
+        if not client_id:
+            client_id = f"client-{self.client_address[0]}:{self.client_address[1]}"
 
-        done_event = threading.Event()
-        result_holder = {}
+        queue_timeout = float(os.getenv("QUEUE_TIMEOUT", "120.0"))
+        exec_timeout = float(os.getenv("EXEC_TIMEOUT", "60.0"))
 
-        command_queue.put((endpoint, data, done_event, result_holder))
+        req = CommandRequest(
+            endpoint=endpoint,
+            data=data,
+            client_id=client_id,
+            queue_timeout=queue_timeout,
+            exec_timeout=exec_timeout
+        )
 
-        if done_event.wait(timeout=40.0):
-            status_code = result_holder.get("http_status", 200)
-            return self._send_json(result_holder.get("payload", {}), status_code)
+        curr_q = command_queue.qsize()
+        if curr_q > 0 or status_cache.get("is_busy"):
+            print(f"[Camoufox Queue] ⏳ Client '{client_id}' queued '{endpoint}' (position in line: {curr_q + 1})", flush=True)
+
+        command_queue.put(req)
+
+        # 1. Wait to acquire the exclusive execution lock from queue
+        if not req.started_event.wait(timeout=req.queue_timeout):
+            req.cancelled.set()
+            print(f"[Camoufox Queue] ⚠️ Queue wait timeout ({req.queue_timeout}s) for client '{client_id}' ({endpoint})", flush=True)
+            return self._send_json({
+                "error": "Server busy: queue wait timeout exceeded (another client is using Camoufox)",
+                "status": "queue_timeout"
+            }, 503)
+
+        # 2. Wait for command execution to complete
+        if req.done_event.wait(timeout=req.exec_timeout):
+            status_code = req.result_holder.get("http_status", 200)
+            return self._send_json(req.result_holder.get("payload", {}), status_code)
         else:
-            return self._send_json({"error": "Browser command timed out"}, 504)
+            print(f"[Camoufox Queue] ⚠️ Execution timeout ({req.exec_timeout}s) for client '{client_id}' ({endpoint})", flush=True)
+            return self._send_json({
+                "error": "Browser command execution timed out",
+                "status": "exec_timeout"
+            }, 504)
 
 def start_api_server(port=9377):
     ThreadingHTTPServer.allow_reuse_address = True
@@ -607,6 +696,8 @@ def main():
         "enable_cache": enable_cache,
         "allow_addon_new_tab": True,
         "firefox_user_prefs": firefox_prefs,
+        "canvas_noise": get_env_bool("CANVAS_NOISE", False),
+        "i_know_what_im_doing": True,
     }
     if proxy_config:
         camoufox_kwargs["proxy"] = proxy_config
@@ -695,27 +786,47 @@ def main():
 
             while running:
                 try:
-                    item = command_queue.get(timeout=0.5)
-                    if not item or item[0] is None:
-                        continue
-                    endpoint, data, done_event, result_holder = item
+                    req = command_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
 
-                # Ensure a valid active page for the command
-                try:
-                    active_pages = [p for p in browser.pages if not p.is_closed()]
-                    if not active_pages:
-                        curr_page = browser.new_page()
-                        active_tab_index = 0
-                    else:
-                        if active_tab_index >= len(active_pages):
-                            active_tab_index = len(active_pages) - 1
-                        curr_page = active_pages[active_tab_index]
-                except Exception:
+                if not req:
                     continue
 
+                if req.cancelled.is_set():
+                    print(f"[Camoufox Lock] Skipping cancelled/timed-out request {req.id} from '{req.client_id}' ({req.endpoint})", flush=True)
+                    continue
+
+                req.started_at = time.time()
+                wait_time = req.started_at - req.created_at
+                req.started_event.set()
+
+                status_cache["is_busy"] = True
+                status_cache["active_client"] = req.client_id
+                status_cache["active_command"] = req.endpoint
+                status_cache["queue_length"] = command_queue.qsize()
+
+                print(f"[Camoufox Lock] 🔒 Lock acquired by '{req.client_id}' for '{req.endpoint}' (waited: {wait_time:.2f}s, in queue: {command_queue.qsize()})", flush=True)
+
+                endpoint = req.endpoint
+                data = req.data
+                result_holder = req.result_holder
+
                 try:
+                    # Ensure a valid active page for the command
+                    try:
+                        active_pages = [p for p in browser.pages if not p.is_closed()]
+                        if not active_pages:
+                            curr_page = browser.new_page()
+                            active_tab_index = 0
+                        else:
+                            if active_tab_index >= len(active_pages):
+                                active_tab_index = len(active_pages) - 1
+                            curr_page = active_pages[active_tab_index]
+                    except Exception as pe:
+                        result_holder["http_status"] = 500
+                        result_holder["payload"] = {"error": f"Failed to get active page: {str(pe)}"}
+                        continue
                     if endpoint == '/navigate':
                         target_url = data.get('url')
                         if not target_url:
@@ -853,6 +964,102 @@ def main():
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Either 'selector' or ('x', 'y') coordinates are required"}
 
+                    elif endpoint == '/move':
+                        selector = data.get('selector')
+                        x = data.get('x')
+                        y = data.get('y')
+
+                        if x is not None and y is not None:
+                            try:
+                                target_x = float(x)
+                                target_y = float(y)
+                                human_mouse.move(curr_page, target_x, target_y)
+                                page_title = safe_get_title(curr_page)
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "url": curr_page.url,
+                                    "title": page_title,
+                                    "moved_to": {"x": target_x, "y": target_y}
+                                }
+                            except Exception as e:
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {"error": f"Mouse move failed: {str(e)}"}
+                        elif selector:
+                            try:
+                                tx, ty = get_element_coords(curr_page, selector)
+                                if tx is not None and ty is not None:
+                                    human_mouse.move(curr_page, tx, ty)
+                                else:
+                                    curr_page.hover(selector, timeout=8000)
+                                    tx, ty = human_mouse.last_x, human_mouse.last_y
+                                page_title = safe_get_title(curr_page)
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "url": curr_page.url,
+                                    "title": page_title,
+                                    "moved_to": {"x": tx, "y": ty, "selector": selector}
+                                }
+                            except Exception as e:
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {"error": f"Move to selector failed: {str(e)}"}
+                        else:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Either 'selector' or ('x', 'y') coordinates are required"}
+
+                    elif endpoint == '/drag_and_drop':
+                        source_sel = data.get('source_selector') or data.get('source')
+                        target_sel = data.get('target_selector') or data.get('target')
+                        source_x = data.get('source_x') if data.get('source_x') is not None else data.get('from_x')
+                        source_y = data.get('source_y') if data.get('source_y') is not None else data.get('from_y')
+                        target_x = data.get('target_x') if data.get('target_x') is not None else data.get('to_x')
+                        target_y = data.get('target_y') if data.get('target_y') is not None else data.get('to_y')
+                        button = data.get('button', 'left')
+
+                        start_x, start_y = None, None
+                        end_x, end_y = None, None
+
+                        if source_x is not None and source_y is not None:
+                            start_x, start_y = float(source_x), float(source_y)
+                        elif source_sel:
+                            start_x, start_y = get_element_coords(curr_page, source_sel)
+
+                        if target_x is not None and target_y is not None:
+                            end_x, end_y = float(target_x), float(target_y)
+                        elif target_sel:
+                            end_x, end_y = get_element_coords(curr_page, target_sel)
+
+                        if start_x is not None and start_y is not None and end_x is not None and end_y is not None:
+                            try:
+                                human_mouse.drag_and_drop(curr_page, start_x, start_y, end_x, end_y, button=button)
+                                page_title = safe_get_title(curr_page)
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "from": {"x": start_x, "y": start_y},
+                                    "to": {"x": end_x, "y": end_y},
+                                    "url": curr_page.url,
+                                    "title": page_title
+                                }
+                            except Exception as e:
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {"error": f"Human drag and drop failed: {str(e)}"}
+                        elif source_sel and target_sel:
+                            try:
+                                curr_page.drag_and_drop(source_sel, target_sel, timeout=12000)
+                                page_title = safe_get_title(curr_page)
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "source": source_sel,
+                                    "target": target_sel,
+                                    "url": curr_page.url,
+                                    "title": page_title
+                                }
+                            except Exception as e:
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {"error": f"Playwright drag_and_drop failed: {str(e)}"}
+                        else:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Both source (selector or x,y) and target (selector or x,y) are required"}
+
                     elif endpoint == '/type':
                         selector = data.get('selector')
                         text_val = data.get('text', '')
@@ -901,6 +1108,67 @@ def main():
                                     "selector": selector,
                                     "filename": filename or os.path.basename(upload_target)
                                 }
+
+                    elif endpoint == '/downloads' or endpoint == '/list_downloads':
+                        d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
+                        files_list = []
+                        if os.path.exists(d_dir):
+                            for fname in os.listdir(d_dir):
+                                fpath = os.path.join(d_dir, fname)
+                                if os.path.isfile(fpath):
+                                    try:
+                                        stat = os.stat(fpath)
+                                        size_bytes = stat.st_size
+                                        if size_bytes < 1024:
+                                            size_fmt = f"{size_bytes} B"
+                                        elif size_bytes < 1024 * 1024:
+                                            size_fmt = f"{size_bytes / 1024:.1f} KB"
+                                        else:
+                                            size_fmt = f"{size_bytes / (1024 * 1024):.2f} MB"
+                                        
+                                        files_list.append({
+                                            "name": fname,
+                                            "size_bytes": size_bytes,
+                                            "size": size_fmt,
+                                            "modified_at": stat.st_mtime
+                                        })
+                                    except Exception:
+                                        pass
+                        files_list.sort(key=lambda x: x["modified_at"], reverse=True)
+                        result_holder["payload"] = {
+                            "status": "ok",
+                            "downloads_dir": d_dir,
+                            "count": len(files_list),
+                            "files": files_list
+                        }
+
+                    elif endpoint == '/get_download':
+                        filename = data.get('filename') or data.get('name')
+                        if not filename:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Parameter 'filename' is required"}
+                        else:
+                            clean_name = os.path.basename(filename.strip())
+                            d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
+                            fpath = os.path.join(d_dir, clean_name)
+                            if not os.path.exists(fpath) or not os.path.isfile(fpath):
+                                result_holder["http_status"] = 404
+                                result_holder["payload"] = {"error": f"File '{clean_name}' not found in {d_dir}"}
+                            else:
+                                try:
+                                    stat = os.stat(fpath)
+                                    with open(fpath, "rb") as f:
+                                        content_bytes = f.read()
+                                    b64 = base64.b64encode(content_bytes).decode('utf-8')
+                                    result_holder["payload"] = {
+                                        "status": "ok",
+                                        "filename": clean_name,
+                                        "size_bytes": stat.st_size,
+                                        "base64_data": b64
+                                    }
+                                except Exception as fe:
+                                    result_holder["http_status"] = 500
+                                    result_holder["payload"] = {"error": f"Failed to read file: {str(fe)}"}
 
                     elif endpoint == '/press_key':
                         key = data.get('key')
@@ -1116,7 +1384,14 @@ def main():
                     result_holder["payload"] = {"error": str(ex)}
 
                 finally:
-                    done_event.set()
+                    req.finished_at = time.time()
+                    exec_dur = req.finished_at - req.started_at if req.started_at else 0.0
+                    print(f"[Camoufox Lock] 🔓 Lock released by '{req.client_id}' for '{req.endpoint}' (duration: {exec_dur:.2f}s)", flush=True)
+                    status_cache["is_busy"] = False
+                    status_cache["active_client"] = None
+                    status_cache["active_command"] = None
+                    status_cache["queue_length"] = command_queue.qsize()
+                    req.done_event.set()
 
     except Exception as err:
         print(f"[Camoufox] Browser instance closed or terminated: {err}", flush=True)
