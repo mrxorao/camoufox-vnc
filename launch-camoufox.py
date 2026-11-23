@@ -679,7 +679,10 @@ def main():
     proxy_server = os.getenv("PROXY_SERVER", "").strip()
     proxy_config = None
     if proxy_server:
-        proxy_config = {"server": proxy_server}
+        proxy_config = {
+            "server": proxy_server,
+            "bypass": os.getenv("PROXY_BYPASS", "0.0.4.0,localhost,127.0.0.1"),
+        }
         proxy_user = os.getenv("PROXY_USERNAME", "").strip()
         proxy_pass = os.getenv("PROXY_PASSWORD", "").strip()
         if proxy_user:
