@@ -839,6 +839,9 @@ def main():
 
             threading.Thread(target=browser_watchdog, daemon=True).start()
 
+            session_tabs = {}
+            page_last_touch = {}
+
             while running:
                 try:
                     req = command_queue.get(timeout=0.5)
@@ -868,16 +871,67 @@ def main():
                 result_holder = req.result_holder
 
                 try:
-                    # Ensure a valid active page for the command
+                    # Ensure a valid active page for the command (with per-agent tab_index / session_id isolation)
+                    req_tab_index = data.get("tab_index") if isinstance(data, dict) else None
+                    req_session_id = (str(data.get("session_id") or "").strip() or None) if isinstance(data, dict) else None
                     try:
                         active_pages = [p for p in browser.pages if not p.is_closed()]
                         if not active_pages:
                             curr_page = browser.new_page()
+                            active_pages = [curr_page]
                             active_tab_index = 0
+
+                        for sid_k, sp in list(session_tabs.items()):
+                            if sp not in active_pages:
+                                del session_tabs[sid_k]
+
+                        prev_page = active_pages[active_tab_index] if 0 <= active_tab_index < len(active_pages) else active_pages[-1]
+
+                        if req_tab_index is not None and endpoint not in ('/close_tab', '/switch_tab'):
+                            t_idx = int(req_tab_index)
+                            if not (0 <= t_idx < len(active_pages)):
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {
+                                    "error": f"Invalid tab_index {t_idx}. Open tabs: 0 to {len(active_pages) - 1}"
+                                }
+                                continue
+                            active_tab_index = t_idx
+                            curr_page = active_pages[active_tab_index]
+                            if req_session_id:
+                                session_tabs[req_session_id] = curr_page
+                        elif req_session_id and endpoint not in ('/new_tab', '/close_tab', '/switch_tab'):
+                            if req_session_id in session_tabs and session_tabs[req_session_id] in active_pages:
+                                curr_page = session_tabs[req_session_id]
+                                active_tab_index = active_pages.index(curr_page)
+                            else:
+                                assigned_p = None
+                                owned_pages = set(session_tabs.values())
+                                now_ts = time.time()
+                                for candidate_p in active_pages:
+                                    if candidate_p in owned_pages:
+                                        continue
+                                    last_owner, last_ts = page_last_touch.get(candidate_p, (None, 0.0))
+                                    if last_owner is None or last_owner == req_session_id or (now_ts - last_ts > 180.0):
+                                        assigned_p = candidate_p
+                                        break
+                                if assigned_p is None:
+                                    assigned_p = create_new_tab(browser, prev_page, start_url)
+                                    active_pages = [p for p in browser.pages if not p.is_closed()]
+                                    if assigned_p not in active_pages:
+                                        assigned_p = active_pages[-1]
+                                session_tabs[req_session_id] = assigned_p
+                                curr_page = assigned_p
+                                active_tab_index = active_pages.index(curr_page)
                         else:
                             if active_tab_index >= len(active_pages):
                                 active_tab_index = len(active_pages) - 1
                             curr_page = active_pages[active_tab_index]
+
+                        if curr_page != prev_page and endpoint not in ('/tabs', '/downloads', '/list_downloads', '/get_download'):
+                            try:
+                                curr_page.bring_to_front()
+                            except Exception:
+                                pass
                     except Exception as pe:
                         result_holder["http_status"] = 500
                         result_holder["payload"] = {"error": f"Failed to get active page: {str(pe)}"}
@@ -1532,12 +1586,14 @@ def main():
 
                     elif endpoint == '/close_tab':
                         active_pages = [p for p in browser.pages if not p.is_closed()]
-                        raw_idx = data.get('index')
+                        raw_idx = data.get('index') if data.get('index') is not None else req_tab_index
                         if raw_idx is not None:
                             try:
                                 target_idx = int(raw_idx)
                             except (ValueError, TypeError):
                                 target_idx = active_tab_index
+                        elif req_session_id and req_session_id in session_tabs and session_tabs[req_session_id] in active_pages:
+                            target_idx = active_pages.index(session_tabs[req_session_id])
                         else:
                             target_idx = active_tab_index
 
@@ -1594,20 +1650,25 @@ def main():
                         active_pages = [p for p in browser.pages if not p.is_closed()]
                         tabs_list = []
                         for idx, p in enumerate(active_pages):
+                            owner_sid = next((sid for sid, sp in session_tabs.items() if sp == p), None)
                             tabs_list.append({
                                 "index": idx,
                                 "url": p.url,
                                 "title": safe_get_title(p),
-                                "is_active": idx == active_tab_index
+                                "is_active": idx == active_tab_index,
+                                "session_id": owner_sid
                             })
                         result_holder["payload"] = {"status": "ok", "tabs": tabs_list, "count": len(tabs_list)}
 
                     elif endpoint == '/switch_tab':
-                        idx = int(data.get('index', 0))
+                        raw_sw = data.get('index') if data.get('index') is not None else req_tab_index
+                        idx = int(raw_sw or 0)
                         active_pages = [p for p in browser.pages if not p.is_closed()]
                         if 0 <= idx < len(active_pages):
                             active_tab_index = idx
                             p = active_pages[idx]
+                            if req_session_id:
+                                session_tabs[req_session_id] = p
                             p.bring_to_front()
                             page_title = safe_get_title(p)
                             status_cache["url"] = p.url
@@ -1615,6 +1676,7 @@ def main():
                             result_holder["payload"] = {
                                 "status": "ok",
                                 "active_index": idx,
+                                "tab_index": idx,
                                 "url": p.url,
                                 "title": page_title
                             }
@@ -1627,6 +1689,23 @@ def main():
                     else:
                         result_holder["http_status"] = 404
                         result_holder["payload"] = {"error": f"Unknown endpoint '{endpoint}'"}
+
+                    # Update session_tabs and page_last_touch after command execution
+                    active_pages_after = [p for p in browser.pages if not p.is_closed()]
+                    if curr_page and not curr_page.is_closed() and curr_page in active_pages_after:
+                        active_tab_index = active_pages_after.index(curr_page)
+                        if req_session_id and endpoint != '/close_tab':
+                            session_tabs[req_session_id] = curr_page
+                        if endpoint not in ('/tabs', '/downloads', '/list_downloads', '/get_download'):
+                            page_last_touch[curr_page] = (req_session_id or req.client_id, time.time())
+                    elif req_session_id and endpoint == '/close_tab':
+                        session_tabs.pop(req_session_id, None)
+
+                    payload_obj = result_holder.get("payload")
+                    if isinstance(payload_obj, dict) and "error" not in payload_obj:
+                        payload_obj.setdefault("tab_index", active_tab_index)
+                        if req_session_id:
+                            payload_obj.setdefault("session_id", req_session_id)
 
                 except Exception as ex:
                     result_holder["http_status"] = 500

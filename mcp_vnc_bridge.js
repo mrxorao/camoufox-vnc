@@ -46,7 +46,6 @@ const CAMOUFOX_API_URL = rawHost.startsWith("http://") || rawHost.startsWith("ht
 const CLIENT_ID = process.env.CAMOUFOX_CLIENT_ID ||
   `mcp-${process.env.USER || process.env.USERNAME || "client"}-${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
 
-// Local serialization queue so that concurrent tool calls inside the same MCP client are sent sequentially (1 at a time)
 let localQueue = Promise.resolve();
 function runExclusive(fn) {
   const next = localQueue.then(fn, fn);
@@ -54,13 +53,44 @@ function runExclusive(fn) {
   return next;
 }
 
+const TAB_ISOLATION_PROPS = {
+  tab_index: {
+    type: "number",
+    description: "Optional tab index (0, 1, 2...) to target a specific browser tab so concurrent agents do not overwrite each other's active tab.",
+  },
+  session_id: {
+    type: "string",
+    description: "Optional agent/task session ID (e.g. 'agent-sara' or 'task-1'). Automatically assigns and isolates a dedicated tab for this session across calls.",
+  },
+};
+
+function withTabIsolation(payload = {}, args = {}) {
+  const out = { ...payload };
+  if (args && args.tab_index !== undefined && args.tab_index !== null) {
+    out.tab_index = Number(args.tab_index);
+  }
+  if (args && args.session_id) {
+    out.session_id = String(args.session_id).trim();
+  }
+  return out;
+}
+
+function tabTag(res) {
+  if (!res || typeof res !== "object") return "";
+  const parts = [];
+  if (res.tab_index !== undefined && res.tab_index !== null) parts.push(`Tab ${res.tab_index}`);
+  if (res.session_id) parts.push(`session: ${res.session_id}`);
+  return parts.length > 0 ? `[${parts.join(" | ")}] ` : "";
+}
+
 async function sendCmd(endpoint, data = null, method = "POST") {
   const url = `${CAMOUFOX_API_URL}${endpoint}`;
+  const clientIdHeader = (data && data.session_id) ? `${CLIENT_ID}:${data.session_id}` : CLIENT_ID;
   const options = {
     method,
     headers: {
       "Content-Type": "application/json",
-      "X-MCP-Client-Id": CLIENT_ID,
+      "X-MCP-Client-Id": clientIdHeader,
     },
   };
   if (data !== null) {
@@ -92,7 +122,7 @@ async function sendCmd(endpoint, data = null, method = "POST") {
 const server = new Server(
   {
     name: "camoufox",
-    version: "1.0.0",
+    version: "1.1.0",
   },
   {
     capabilities: {
@@ -106,31 +136,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "browse",
-        description: "Navigate to a URL in the Docker VNC browser. By default navigates the current tab; set new_tab: true to open in a new tab inside the existing window (strictly single-window, no new OS windows are ever opened). Visible live in noVNC (http://localhost:5800).",
+        description: "Navigate to a URL in the Docker VNC browser. Supports tab_index or session_id to isolate concurrent agents in separate tabs.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "Target URL (e.g. 'https://example.com')" },
             new_tab: { type: "boolean", description: "If true, opens the URL in a new tab inside the current window instead of replacing the active tab." },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["url"],
         },
       },
       {
         name: "browse_navigate",
-        description: "Navigate the active tab to a specific URL inside the VNC browser.",
+        description: "Navigate the active (or specified tab_index / session_id) tab to a URL inside the VNC browser.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "URL to navigate to" },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["url"],
         },
       },
       {
         name: "browse_snapshot",
-        description: "Get the title, URL, interactive elements (buttons, links, inputs with CSS selectors and x,y coordinates), visible images, and readable text of the page currently open in Docker noVNC.",
-        inputSchema: { type: "object", properties: {} },
+        description: "Get the title, URL, interactive elements (buttons, links, inputs with CSS selectors and x,y coordinates), visible images, and readable text of the page.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...TAB_ISOLATION_PROPS,
+          },
+        },
       },
       {
         name: "browse_click",
@@ -141,6 +178,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: { type: "string", description: "CSS selector of the element to click (optional if x,y provided)" },
             x: { type: "number", description: "X coordinate in pixels (optional alternative to selector)" },
             y: { type: "number", description: "Y coordinate in pixels (optional alternative to selector)" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
@@ -153,6 +191,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: { type: "string", description: "CSS selector of the element to move/hover to (optional if x,y provided)" },
             x: { type: "number", description: "X coordinate in pixels (optional alternative to selector)" },
             y: { type: "number", description: "Y coordinate in pixels (optional alternative to selector)" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
@@ -168,6 +207,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             source_y: { type: "number", description: "Start Y coordinate in pixels" },
             target_x: { type: "number", description: "Target X coordinate in pixels" },
             target_y: { type: "number", description: "Target Y coordinate in pixels" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
@@ -180,6 +220,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: { type: "string", description: "CSS selector of the field" },
             text: { type: "string", description: "Text to type" },
             clear_first: { type: "boolean", description: "Clear the field before typing" },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["selector", "text"],
         },
@@ -192,6 +233,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             selector: { type: "string", description: "CSS selector of the <input type='file'> element (e.g. 'input[type=file]')" },
             file_path: { type: "string", description: "Absolute file path on the host (e.g. '/home/user/document.pdf')" },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["selector", "file_path"],
         },
@@ -220,6 +262,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             key: { type: "string", description: "Key name (e.g. 'Enter', 'Tab')" },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["key"],
         },
@@ -232,6 +275,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             direction: { type: "string", enum: ["down", "up"], description: "Scroll direction (default: 'down')" },
             amount: { type: "number", description: "Pixels to scroll (default 500)" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
@@ -243,6 +287,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             selector: { type: "string", description: "Optional CSS selector to capture only a specific element" },
             full_page: { type: "boolean", description: "Optional: if true, captures the full scrollable page (default: false)" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
@@ -253,33 +298,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             script: { type: "string", description: "JavaScript code to execute" },
+            ...TAB_ISOLATION_PROPS,
           },
           required: ["script"],
         },
       },
       {
         name: "browse_new_tab",
-        description: "Open a URL in a new tab inside the existing browser window (strictly single-window mode; never opens separate OS windows).",
+        description: "Open a URL in a new tab inside the existing browser window (strictly single-window mode; never opens separate OS windows). Returns the new tab_index.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "New tab URL (e.g. 'https://duckduckgo.com')" },
+            session_id: TAB_ISOLATION_PROPS.session_id,
           },
         },
       },
       {
         name: "browse_close_tab",
-        description: "Close a specific browser tab by index (or active tab if omitted). Strictly enforces single-window mode and automatically activates the nearest remaining tab.",
+        description: "Close a specific browser tab by index (or session_id / active tab if omitted). Strictly enforces single-window mode.",
         inputSchema: {
           type: "object",
           properties: {
-            index: { type: "number", description: "Numeric index of tab to close (optional, defaults to active tab)" },
+            index: { type: "number", description: "Numeric index of tab to close (optional)" },
+            ...TAB_ISOLATION_PROPS,
           },
         },
       },
       {
         name: "browse_tabs",
-        description: "List all open tabs in the single browser window with their indices, URLs, titles, and active status.",
+        description: "List all open tabs in the single browser window with their indices, URLs, titles, active status, and assigned session_id.",
         inputSchema: { type: "object", properties: {} },
       },
       {
@@ -289,6 +337,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             index: { type: "number", description: "Numeric tab index" },
+            session_id: TAB_ISOLATION_PROPS.session_id,
           },
           required: ["index"],
         },
@@ -302,351 +351,351 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     try {
-    if (name === "browse") {
-      let targetUrl = (args.url || "https://duckduckgo.com").trim();
-      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
-        targetUrl = "https://" + targetUrl;
+      if (name === "browse") {
+        let targetUrl = (args?.url || "https://duckduckgo.com").trim();
+        if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+          targetUrl = "https://" + targetUrl;
+        }
+
+        if (args?.new_tab) {
+          const res = await sendCmd("/new_tab", withTabIsolation({ url: targetUrl }, args));
+          if (res.error) {
+            return { isError: true, content: [{ type: "text", text: `Failed to open in new tab: ${res.error}` }] };
+          }
+          return {
+            content: [{ type: "text", text: `🌐 ${tabTag(res)}Opened in new tab (index ${res.tab_index}): ${res.url}` }],
+          };
+        } else {
+          const res = await sendCmd("/navigate", withTabIsolation({ url: targetUrl }, args));
+          if (res.error) {
+            return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
+          }
+          return {
+            content: [{ type: "text", text: `🌐 ${tabTag(res)}Navigated to: ${res.url}` }],
+          };
+        }
       }
 
-      if (args.new_tab) {
-        const res = await sendCmd("/new_tab", { url: targetUrl });
-        if (res.error) {
-          return { isError: true, content: [{ type: "text", text: `Failed to open in new tab: ${res.error}` }] };
-        }
-        return {
-          content: [{ type: "text", text: `🌐 Opened in new tab (index ${res.tab_index}): ${res.url}` }],
-        };
-      } else {
-        const res = await sendCmd("/navigate", { url: targetUrl });
+      if (name === "browse_navigate") {
+        const res = await sendCmd("/navigate", withTabIsolation({ url: args.url }, args));
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
         }
         return {
-          content: [{ type: "text", text: `🌐 Navigated to: ${res.url}` }],
-        };
-      }
-    }
-
-    if (name === "browse_navigate") {
-      const res = await sendCmd("/navigate", { url: args.url });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `Navigated to: ${res.url}` }],
-      };
-    }
-
-    if (name === "browse_snapshot") {
-      const res = await sendCmd("/snapshot");
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Snapshot failed: ${res.error}` }] };
-      }
-      const sections = [
-        `Page Title: ${res.title}`,
-        `URL: ${res.url}`,
-      ];
-      if (res.viewport) {
-        sections.push(`Viewport: ${res.viewport.width}x${res.viewport.height} (scroll Y: ${res.viewport.scroll_y}/${res.viewport.scroll_height})`);
-      }
-      if (res.formatted_elements) {
-        sections.push(`\n${res.formatted_elements}`);
-      }
-      sections.push(`\nVisible Content:\n${res.text}`);
-      return {
-        content: [
-          {
-            type: "text",
-            text: sections.join("\n"),
-          },
-        ],
-      };
-    }
-
-    if (name === "browse_click") {
-      const payload = {};
-      if (args.selector) payload.selector = args.selector;
-      if (args.x !== undefined) payload.x = Number(args.x);
-      if (args.y !== undefined) payload.y = Number(args.y);
-
-      if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Either 'selector' or both 'x' and 'y' coordinates must be provided." }],
+          content: [{ type: "text", text: `${tabTag(res)}Navigated to: ${res.url}` }],
         };
       }
 
-      const res = await sendCmd("/click", payload);
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Click failed: ${res.error}` }] };
-      }
-      const targetDesc = payload.selector ? `'${payload.selector}'` : `(${payload.x}, ${payload.y})`;
-      return {
-        content: [{ type: "text", text: `🖱️ Successfully clicked ${targetDesc}.` }],
-      };
-    }
-
-    if (name === "browse_move") {
-      const payload = {};
-      if (args.selector) payload.selector = args.selector;
-      if (args.x !== undefined) payload.x = Number(args.x);
-      if (args.y !== undefined) payload.y = Number(args.y);
-
-      if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Either 'selector' or both 'x' and 'y' coordinates must be provided." }],
-        };
-      }
-
-      const res = await sendCmd("/move", payload);
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Move failed: ${res.error}` }] };
-      }
-      const targetDesc = payload.selector ? `'${payload.selector}'` : `(${payload.x}, ${payload.y})`;
-      return {
-        content: [{ type: "text", text: `🖱️ Mouse cursor smoothly moved to ${targetDesc}.` }],
-      };
-    }
-
-    if (name === "browse_drag_and_drop") {
-      const payload = {};
-      if (args.source_selector) payload.source_selector = args.source_selector;
-      if (args.target_selector) payload.target_selector = args.target_selector;
-      if (args.source_x !== undefined) payload.source_x = Number(args.source_x);
-      if (args.source_y !== undefined) payload.source_y = Number(args.source_y);
-      if (args.target_x !== undefined) payload.target_x = Number(args.target_x);
-      if (args.target_y !== undefined) payload.target_y = Number(args.target_y);
-
-      const hasSource = payload.source_selector || (payload.source_x !== undefined && payload.source_y !== undefined);
-      const hasTarget = payload.target_selector || (payload.target_x !== undefined && payload.target_y !== undefined);
-
-      if (!hasSource || !hasTarget) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Both source (selector or x,y) and target (selector or x,y) must be provided for drag and drop." }],
-        };
-      }
-
-      const res = await sendCmd("/drag_and_drop", payload);
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Drag and drop failed: ${res.error}` }] };
-      }
-      const fromDesc = res.from ? `(${res.from.x}, ${res.from.y})` : payload.source_selector;
-      const toDesc = res.to ? `(${res.to.x}, ${res.to.y})` : payload.target_selector;
-      return {
-        content: [{ type: "text", text: `🖱️ Successfully dragged from ${fromDesc} to ${toDesc}.` }],
-      };
-    }
-
-    if (name === "browse_type") {
-      const res = await sendCmd("/type", {
-        selector: args.selector,
-        text: args.text,
-        clear: args.clear_first ?? true,
-      });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Type failed: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `⌨️ Text successfully typed into '${args.selector}'.` }],
-      };
-    }
-
-    if (name === "browse_upload_file") {
-      const filePath = args.file_path;
-      if (!fs.existsSync(filePath)) {
-        return { isError: true, content: [{ type: "text", text: `File not found on the system: ${filePath}` }] };
-      }
-
-      const fileBuffer = fs.readFileSync(filePath);
-      const base64Data = fileBuffer.toString("base64");
-      const filename = path.basename(filePath);
-
-      const res = await sendCmd("/upload", {
-        selector: args.selector,
-        base64_data: base64Data,
-        filename: filename,
-      });
-
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `File upload failed: ${res.error}` }] };
-      }
-
-      return {
-        content: [{ type: "text", text: `📎 File '${filename}' (${(fileBuffer.length / 1024).toFixed(1)} KB) successfully uploaded to '${args.selector}'.` }],
-      };
-    }
-
-    if (name === "browse_list_downloads") {
-      const res = await sendCmd("/downloads");
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to list downloads: ${res.error}` }] };
+      if (name === "browse_snapshot") {
+        const res = await sendCmd("/snapshot", withTabIsolation({}, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Snapshot failed: ${res.error}` }] };
         }
-      if (!res.files || res.files.length === 0) {
+        const sections = [
+          `${tabTag(res)}Page Title: ${res.title}`,
+          `URL: ${res.url}`,
+        ];
+        if (res.viewport) {
+          sections.push(`Viewport: ${res.viewport.width}x${res.viewport.height} (scroll Y: ${res.viewport.scroll_y}/${res.viewport.scroll_height})`);
+        }
+        if (res.formatted_elements) {
+          sections.push(`\n${res.formatted_elements}`);
+        }
+        sections.push(`\nVisible Content:\n${res.text}`);
         return {
-          content: [{ type: "text", text: `📠 No downloaded files found in ${res.downloads_dir || "/data/downloads"}.` }],
+          content: [
+            {
+              type: "text",
+              text: sections.join("\n"),
+            },
+          ],
         };
       }
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.files, null, 2) }],
-      };
-    }
 
-    if (name === "browse_get_download") {
-      const filename = args.filename;
-      const res = await sendCmd("/get_download", { filename });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to get download '${filename}': ${res.error}` }] };
-      }
+      if (name === "browse_click") {
+        const payload = withTabIsolation({}, args);
+        if (args.selector) payload.selector = args.selector;
+        if (args.x !== undefined) payload.x = Number(args.x);
+        if (args.y !== undefined) payload.y = Number(args.y);
 
-      if (args.save_path) {
-        try {
-          const savePath = path.resolve(args.save_path);
-          fs.mkdirSync(path.dirname(savePath), { recursive: true });
-          const fileBuf = Buffer.from(res.base64_data, "base64");
-          fs.writeFileSync(savePath, fileBuf);
+        if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
           return {
-            content: [{ type: "text", text: `💾 Downloaded file '${filename}' (${(res.size_bytes / 1024).toFixed(1)} KB) successfully saved locally to: ${savePath}` }],
+            isError: true,
+            content: [{ type: "text", text: "Either 'selector' or both 'x' and 'y' coordinates must be provided." }],
           };
-        } catch (saveErr) {
-          return { isError: true, content: [{ type: "text", text: `Failed to write file locally: ${saveErr.message}` }] };
         }
+
+        const res = await sendCmd("/click", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Click failed: ${res.error}` }] };
+        }
+        const targetDesc = payload.selector ? `'${payload.selector}'` : `(${payload.x}, ${payload.y})`;
+        return {
+          content: [{ type: "text", text: `🖱️ ${tabTag(res)}Successfully clicked ${targetDesc}.` }],
+        };
       }
 
+      if (name === "browse_move") {
+        const payload = withTabIsolation({}, args);
+        if (args.selector) payload.selector = args.selector;
+        if (args.x !== undefined) payload.x = Number(args.x);
+        if (args.y !== undefined) payload.y = Number(args.y);
+
+        if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: "Either 'selector' or both 'x' and 'y' coordinates must be provided." }],
+          };
+        }
+
+        const res = await sendCmd("/move", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Move failed: ${res.error}` }] };
+        }
+        const targetDesc = payload.selector ? `'${payload.selector}'` : `(${payload.x}, ${payload.y})`;
+        return {
+          content: [{ type: "text", text: `🖱️ ${tabTag(res)}Mouse cursor smoothly moved to ${targetDesc}.` }],
+        };
+      }
+
+      if (name === "browse_drag_and_drop") {
+        const payload = withTabIsolation({}, args);
+        if (args.source_selector) payload.source_selector = args.source_selector;
+        if (args.target_selector) payload.target_selector = args.target_selector;
+        if (args.source_x !== undefined) payload.source_x = Number(args.source_x);
+        if (args.source_y !== undefined) payload.source_y = Number(args.source_y);
+        if (args.target_x !== undefined) payload.target_x = Number(args.target_x);
+        if (args.target_y !== undefined) payload.target_y = Number(args.target_y);
+
+        const hasSource = payload.source_selector || (payload.source_x !== undefined && payload.source_y !== undefined);
+        const hasTarget = payload.target_selector || (payload.target_x !== undefined && payload.target_y !== undefined);
+
+        if (!hasSource || !hasTarget) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: "Both source (selector or x,y) and target (selector or x,y) must be provided for drag and drop." }],
+          };
+        }
+
+        const res = await sendCmd("/drag_and_drop", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Drag and drop failed: ${res.error}` }] };
+        }
+        const fromDesc = res.from ? `(${res.from.x}, ${res.from.y})` : payload.source_selector;
+        const toDesc = res.to ? `(${res.to.x}, ${res.to.y})` : payload.target_selector;
+        return {
+          content: [{ type: "text", text: `🖱️ ${tabTag(res)}Successfully dragged from ${fromDesc} to ${toDesc}.` }],
+        };
+      }
+
+      if (name === "browse_type") {
+        const res = await sendCmd("/type", withTabIsolation({
+          selector: args.selector,
+          text: args.text,
+          clear: args.clear_first ?? true,
+        }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Type failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `⌨️ ${tabTag(res)}Text successfully typed into '${args.selector}'.` }],
+        };
+      }
+
+      if (name === "browse_upload_file") {
+        const filePath = args.file_path;
+        if (!fs.existsSync(filePath)) {
+          return { isError: true, content: [{ type: "text", text: `File not found on the system: ${filePath}` }] };
+        }
+
+        const fileBuffer = fs.readFileSync(filePath);
+        const base64Data = fileBuffer.toString("base64");
+        const filename = path.basename(filePath);
+
+        const res = await sendCmd("/upload", withTabIsolation({
+          selector: args.selector,
+          base64_data: base64Data,
+          filename: filename,
+        }, args));
+
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `File upload failed: ${res.error}` }] };
+        }
+
+        return {
+          content: [{ type: "text", text: `📎 ${tabTag(res)}File '${filename}' (${(fileBuffer.length / 1024).toFixed(1)} KB) successfully uploaded to '${args.selector}'.` }],
+        };
+      }
+
+      if (name === "browse_list_downloads") {
+        const res = await sendCmd("/downloads");
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to list downloads: ${res.error}` }] };
+        }
+        if (!res.files || res.files.length === 0) {
+          return {
+            content: [{ type: "text", text: `📠 No downloaded files found in ${res.downloads_dir || "/data/downloads"}.` }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.files, null, 2) }],
+        };
+      }
+
+      if (name === "browse_get_download") {
+        const filename = args.filename;
+        const res = await sendCmd("/get_download", { filename });
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to get download '${filename}': ${res.error}` }] };
+        }
+
+        if (args.save_path) {
+          try {
+            const savePath = path.resolve(args.save_path);
+            fs.mkdirSync(path.dirname(savePath), { recursive: true });
+            const fileBuf = Buffer.from(res.base64_data, "base64");
+            fs.writeFileSync(savePath, fileBuf);
+            return {
+              content: [{ type: "text", text: `💾 Downloaded file '${filename}' (${(res.size_bytes / 1024).toFixed(1)} KB) successfully saved locally to: ${savePath}` }],
+            };
+          } catch (saveErr) {
+            return { isError: true, content: [{ type: "text", text: `Failed to write file locally: ${saveErr.message}` }] };
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `📄 File: ${res.filename} (${(res.size_bytes / 1024).toFixed(1)} KB)\nBase64 length: ${res.base64_data.length} chars`,
+            },
+          ],
+        };
+      }
+
+      if (name === "browse_press_key") {
+        const res = await sendCmd("/press_key", withTabIsolation({ key: args.key }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Key press failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `⌨️ ${tabTag(res)}Key '${args.key}' pressed successfully.` }],
+        };
+      }
+
+      if (name === "browse_scroll") {
+        const deltaY = args?.direction === "up" ? -(args?.amount || 500) : (args?.amount || 500);
+        const res = await sendCmd("/scroll", withTabIsolation({ delta_y: deltaY }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Scroll failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `📜 ${tabTag(res)}Scrolled (${args?.direction || "down"}, ${args?.amount || 500}px).` }],
+        };
+      }
+
+      if (name === "browse_screenshot") {
+        const payload = withTabIsolation({}, args);
+        if (args?.selector) payload.selector = args.selector;
+        if (args?.full_page !== undefined) payload.full_page = Boolean(args.full_page);
+        const res = await sendCmd("/screenshot", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Screenshot failed: ${res.error}` }] };
+        }
+        const fname = res.filename || "screenshot.png";
+        const directUrl = res.screenshot_path
+          ? `${CAMOUFOX_API_URL}${res.screenshot_path}`
+          : `${CAMOUFOX_API_URL}/screenshot.png`;
+        const latestUrl = `${CAMOUFOX_API_URL}/screenshot.png`;
+        const sizeKb = res.size_bytes ? ` (${(res.size_bytes / 1024).toFixed(1)} KB)` : "";
+        const infoText = [
+          `📸 ${tabTag(res)}Screenshot captured${sizeKb}: ${fname}`,
+          `Direct PNG URL: ${directUrl}`,
+          `Latest PNG URL: ${latestUrl}`,
+          `To attach or inspect this file locally in a container/shell, run:`,
+          `curl -k -sL "${directUrl}" -o /tmp/${fname}`,
+        ].join("\n");
+        return {
+          content: [
+            {
+              type: "text",
+              text: infoText,
+            },
+            {
+              type: "image",
+              data: res.image_base64,
+              mimeType: "image/png",
+            },
+          ],
+        };
+      }
+
+      if (name === "browse_evaluate") {
+        const res = await sendCmd("/evaluate", withTabIsolation({ script: args.script }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Script execution failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `${tabTag(res)}JS result: ${JSON.stringify(res.result)}` }],
+        };
+      }
+
+      if (name === "browse_new_tab") {
+        const res = await sendCmd("/new_tab", withTabIsolation({ url: args?.url || "https://duckduckgo.com" }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to open tab: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `📄 ${tabTag(res)}New tab opened in existing window (index ${res.tab_index}): ${res.url}` }],
+        };
+      }
+
+      if (name === "browse_close_tab") {
+        const payload = withTabIsolation({}, args);
+        if (args?.index !== undefined && args?.index !== null) {
+          payload.index = Number(args.index);
+        }
+        const res = await sendCmd("/close_tab", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to close tab: ${res.error}` }] };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `🗑️ Tab ${res.closed_index !== undefined ? res.closed_index : ""} closed. Active tab is now index ${res.active_index}: ${res.url} (${res.title}) [${res.remaining_tabs_count} tab(s) open]`,
+            },
+          ],
+        };
+      }
+
+      if (name === "browse_tabs") {
+        const res = await sendCmd("/tabs");
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to list tabs: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.tabs, null, 2) }],
+        };
+      }
+
+      if (name === "browse_switch_tab") {
+        const res = await sendCmd("/switch_tab", withTabIsolation({ index: args.index }, args));
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to switch_tab: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `${tabTag(res)}Active tab switched to index ${args.index}: ${res.url} (${res.title})` }],
+        };
+      }
+
+      throw new Error(`Unknown tool: ${name}`);
+    } catch (err) {
       return {
-        content: [
-          {
-            type: "text",
-            text: `📄 File: ${res.filename} (${(res.size_bytes / 1024).toFixed(1)} KB)\nBase64 length: ${res.base64_data.length} chars`,
-          },
-        ],
+        isError: true,
+        content: [{ type: "text", text: `Error processing ${name}: ${err.message}` }],
       };
     }
-
-    if (name === "browse_press_key") {
-      const res = await sendCmd("/press_key", { key: args.key });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Key press failed: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `⌨️ Key '${args.key}' pressed successfully.` }],
-      };
-    }
-
-    if (name === "browse_scroll") {
-      const deltaY = args?.direction === "up" ? -(args?.amount || 500) : (args?.amount || 500);
-      const res = await sendCmd("/scroll", { delta_y: deltaY });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Scroll failed: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `📜 Scrolled (${args?.direction || "down"}, ${args?.amount || 500}px).` }],
-      };
-    }
-
-    if (name === "browse_screenshot") {
-      const payload = {};
-      if (args?.selector) payload.selector = args.selector;
-      if (args?.full_page !== undefined) payload.full_page = Boolean(args.full_page);
-      const res = await sendCmd("/screenshot", payload);
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Screenshot failed: ${res.error}` }] };
-      }
-      const fname = res.filename || "screenshot.png";
-      const directUrl = res.screenshot_path
-        ? `${CAMOUFOX_API_URL}${res.screenshot_path}`
-        : `${CAMOUFOX_API_URL}/screenshot.png`;
-      const latestUrl = `${CAMOUFOX_API_URL}/screenshot.png`;
-      const sizeKb = res.size_bytes ? ` (${(res.size_bytes / 1024).toFixed(1)} KB)` : "";
-      const infoText = [
-        `📸 Screenshot captured${sizeKb}: ${fname}`,
-        `Direct PNG URL: ${directUrl}`,
-        `Latest PNG URL: ${latestUrl}`,
-        `To attach or inspect this file locally in a container/shell, run:`,
-        `curl -k -sL "${directUrl}" -o /tmp/${fname}`,
-      ].join("\n");
-      return {
-        content: [
-          {
-            type: "text",
-            text: infoText,
-          },
-          {
-            type: "image",
-            data: res.image_base64,
-            mimeType: "image/png",
-          },
-        ],
-      };
-    }
-
-    if (name === "browse_evaluate") {
-      const res = await sendCmd("/evaluate", { script: args.script });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Script execution failed: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `JS result: ${JSON.stringify(res.result)}` }],
-      };
-    }
-
-    if (name === "browse_new_tab") {
-      const res = await sendCmd("/new_tab", { url: args?.url || "https://duckduckgo.com" });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to open tab: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `📄 New tab opened in existing window (index ${res.tab_index}): ${res.url}` }],
-      };
-    }
-
-    if (name === "browse_close_tab") {
-      const payload = {};
-      if (args?.index !== undefined && args?.index !== null) {
-        payload.index = Number(args.index);
-      }
-      const res = await sendCmd("/close_tab", payload);
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to close tab: ${res.error}` }] };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `🗑️ Tab ${res.closed_index !== undefined ? res.closed_index : ""} closed. Active tab is now index ${res.active_index}: ${res.url} (${res.title}) [${res.remaining_tabs_count} tab(s) open]`,
-          },
-        ],
-      };
-    }
-
-    if (name === "browse_tabs") {
-      const res = await sendCmd("/tabs");
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to list tabs: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.tabs, null, 2) }],
-      };
-    }
-
-    if (name === "browse_switch_tab") {
-      const res = await sendCmd("/switch_tab", { index: args.index });
-      if (res.error) {
-        return { isError: true, content: [{ type: "text", text: `Failed to switch_tab: ${res.error}` }] };
-      }
-      return {
-        content: [{ type: "text", text: `Active tab switched to index ${args.index}: ${res.url} (${res.title})` }],
-      };
-    }
-
-    throw new Error(`Unknown tool: ${name}`);
-  } catch (err) {
-    return {
-      isError: true,
-      content: [{ type: "text", text: `Error processing ${name}: ${err.message}` }],
-    };
-  }
   });
 });
 
