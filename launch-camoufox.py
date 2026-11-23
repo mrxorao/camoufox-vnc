@@ -297,11 +297,63 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
                 return {}
         return {}
 
+    def _send_binary(self, data_bytes, content_type='image/png', status=200, filename=None, head_only=False):
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(data_bytes)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        if filename:
+            self.send_header('Content-Disposition', f'inline; filename="{filename}"')
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(data_bytes)
+
+    def do_HEAD(self):
+        return self._handle_get_or_head(head_only=True)
+
     def do_GET(self):
-        if self.path in ('/health', '/', '/status'):
+        return self._handle_get_or_head(head_only=False)
+
+    def _handle_get_or_head(self, head_only=False):
+        clean_path = self.path.split('?')[0]
+        if clean_path in ('/health', '/', '/status'):
             status_copy = dict(status_cache)
             status_copy["queue_length"] = command_queue.qsize()
             return self._send_json(status_copy)
+        if clean_path in ('/screenshot.png', '/screenshot', '/latest_screenshot.png'):
+            d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
+            latest_fpath = os.path.join(d_dir, "latest_screenshot.png")
+            force_live = 'live=1' in self.path or 'fresh=1' in self.path
+            if not force_live and os.path.exists(latest_fpath) and os.path.isfile(latest_fpath):
+                try:
+                    with open(latest_fpath, "rb") as f:
+                        return self._send_binary(f.read(), 'image/png', 200, 'screenshot.png', head_only=head_only)
+                except Exception as e:
+                    return self._send_json({"error": f"Failed to read screenshot: {str(e)}"}, 500)
+            req = CommandRequest(endpoint='/screenshot', data={}, client_id='http-get-screenshot')
+            command_queue.put(req)
+            if not req.started_event.wait(timeout=req.queue_timeout):
+                req.cancelled.set()
+                return self._send_json({"error": "Queue timeout"}, 503)
+            if req.done_event.wait(timeout=req.exec_timeout):
+                payload = req.result_holder.get("payload", {})
+                b64 = payload.get("image_base64")
+                if b64:
+                    return self._send_binary(base64.b64decode(b64), 'image/png', 200, 'screenshot.png', head_only=head_only)
+                return self._send_json(payload, req.result_holder.get("http_status", 500))
+            return self._send_json({"error": "Execution timeout"}, 504)
+        if clean_path.startswith('/screenshots/'):
+            fname = os.path.basename(clean_path[len('/screenshots/'):].strip())
+            d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
+            fpath = os.path.join(d_dir, fname)
+            if fname and os.path.exists(fpath) and os.path.isfile(fpath):
+                try:
+                    with open(fpath, "rb") as f:
+                        return self._send_binary(f.read(), 'image/png', 200, fname, head_only=head_only)
+                except Exception as e:
+                    return self._send_json({"error": f"Failed to read screenshot: {str(e)}"}, 500)
+            return self._send_json({"error": f"Screenshot '{fname}' not found"}, 404)
         self._send_json({"error": "Endpoint not found"}, 404)
 
     def do_POST(self):
@@ -915,10 +967,181 @@ def main():
                     elif endpoint == '/snapshot':
                         text = safe_get_text(curr_page)
                         page_title = safe_get_title(curr_page)
+                        elements_info = []
+                        images_info = []
+                        viewport_info = None
+                        formatted_lines = []
+                        try:
+                            rich_js = r'''(() => {
+                              const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, '\\$1');
+                              const buildSelector = (el) => {
+                                if (!el || el.nodeType !== 1) return '';
+                                if (el.id) return '#' + cssEsc(el.id);
+                                const tag = el.tagName.toLowerCase();
+                                const nameAttr = el.getAttribute('name');
+                                if (nameAttr && document.querySelectorAll(tag + '[name="' + nameAttr.replace(/"/g, '\\"') + '"]').length === 1) {
+                                  return tag + '[name="' + nameAttr.replace(/"/g, '\\"') + '"]';
+                                }
+                                const ph = el.getAttribute('placeholder');
+                                if (ph && document.querySelectorAll(tag + '[placeholder="' + ph.replace(/"/g, '\\"') + '"]').length === 1) {
+                                  return tag + '[placeholder="' + ph.replace(/"/g, '\\"') + '"]';
+                                }
+                                const alt = el.getAttribute('alt');
+                                if (alt && document.querySelectorAll(tag + '[alt="' + alt.replace(/"/g, '\\"') + '"]').length === 1) {
+                                  return tag + '[alt="' + alt.replace(/"/g, '\\"') + '"]';
+                                }
+                                const aria = el.getAttribute('aria-label');
+                                if (aria && document.querySelectorAll(tag + '[aria-label="' + aria.replace(/"/g, '\\"') + '"]').length === 1) {
+                                  return tag + '[aria-label="' + aria.replace(/"/g, '\\"') + '"]';
+                                }
+                                const parts = [];
+                                let cur = el;
+                                while (cur && cur.nodeType === 1 && cur !== document.body && parts.length < 4) {
+                                  let p = cur.tagName.toLowerCase();
+                                  if (cur.id) {
+                                    parts.unshift('#' + cssEsc(cur.id));
+                                    break;
+                                  }
+                                  const parent = cur.parentElement;
+                                  if (parent) {
+                                    const siblings = [...parent.children].filter(c => c.tagName === cur.tagName);
+                                    if (siblings.length > 1) {
+                                      p += ':nth-of-type(' + (siblings.indexOf(cur) + 1) + ')';
+                                    }
+                                  }
+                                  parts.unshift(p);
+                                  cur = parent;
+                                }
+                                return parts.join(' > ');
+                              };
+                              const visible = (e) => !e.closest('[aria-hidden="true"],[inert]') &&
+                                (typeof e.checkVisibility === 'function' ? e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) : true);
+                              const getLabel = (e) => {
+                                return (e.getAttribute('aria-label') ||
+                                  [...(e.labels || [])].map(l => l.innerText.trim()).filter(Boolean).join(' ') ||
+                                  (['button','submit','reset'].includes(e.type) ? e.value : '') ||
+                                  e.getAttribute('placeholder') ||
+                                  e.getAttribute('alt') ||
+                                  e.getAttribute('title') ||
+                                  (e.tagName === 'INPUT' ? '' : (e.innerText || e.textContent || '').trim()) ||
+                                  e.getAttribute('name') ||
+                                  '').replace(/\s+/g, ' ').trim().slice(0, 120);
+                              };
+                              const roles = ['button','link','checkbox','radio','switch','tab','menuitem','option','combobox','textbox','searchbox','spinbutton'];
+                              const sel = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' + roles.map(r => '[role="' + r + '"]').join(',');
+                              const getRole = (e) => {
+                                const ex = e.getAttribute('role');
+                                if (roles.includes(ex)) return ex;
+                                if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
+                                if (e.tagName === 'A') return 'link';
+                                if (e.tagName === 'SELECT') return 'combobox';
+                                if (e.tagName === 'TEXTAREA' || e.isContentEditable) return 'textbox';
+                                if (e.tagName === 'INPUT') {
+                                  if (['checkbox','radio'].includes(e.type)) return e.type;
+                                  if (['button','submit','reset','image'].includes(e.type)) return 'button';
+                                  if (e.type === 'search') return 'searchbox';
+                                  if (e.type === 'number') return 'spinbutton';
+                                  if (!['hidden'].includes(e.type)) return 'textbox';
+                                }
+                                return 'element';
+                              };
+                              const elements = [];
+                              let idx = 1;
+                              for (const e of document.querySelectorAll(sel)) {
+                                if (e.type === 'hidden' || !visible(e) || e.matches(':disabled')) continue;
+                                const r = e.getBoundingClientRect();
+                                if (r.width <= 1 || r.height <= 1) continue;
+                                const cx = Math.round(r.x + r.width / 2);
+                                const cy = Math.round(r.y + r.height / 2);
+                                if (r.bottom < 0 || r.top > window.innerHeight * 2) continue;
+                                const role = getRole(e);
+                                const label = getLabel(e);
+                                const selector = buildSelector(e);
+                                const val = ('value' in e && e.type !== 'password') ? String(e.value || '').slice(0, 80) : '';
+                                const href = e.tagName === 'A' ? (e.getAttribute('href') || '').slice(0, 120) : '';
+                                elements.push({
+                                  id: 'e' + (idx++),
+                                  role,
+                                  tag: e.tagName.toLowerCase(),
+                                  type: e.type || '',
+                                  label,
+                                  selector,
+                                  x: cx,
+                                  y: cy,
+                                  w: Math.round(r.width),
+                                  h: Math.round(r.height),
+                                  value: val,
+                                  href
+                                });
+                                if (elements.length >= 120) break;
+                              }
+                              const images = [];
+                              let imgIdx = 1;
+                              for (const im of document.querySelectorAll('img,canvas')) {
+                                if (!visible(im)) continue;
+                                const r = im.getBoundingClientRect();
+                                if (r.width < 16 || r.height < 16) continue;
+                                if (r.bottom < 0 || r.top > window.innerHeight * 2) continue;
+                                const cx = Math.round(r.x + r.width / 2);
+                                const cy = Math.round(r.y + r.height / 2);
+                                const rawSrc = im.tagName === 'IMG' ? (im.currentSrc || im.src || '') : '';
+                                const src = rawSrc.startsWith('data:') ? rawSrc.slice(0, 64) + '...' : rawSrc.slice(0, 200);
+                                images.push({
+                                  id: 'img' + (imgIdx++),
+                                  tag: im.tagName.toLowerCase(),
+                                  alt: (im.getAttribute('alt') || im.getAttribute('title') || im.getAttribute('aria-label') || '').trim().slice(0, 100),
+                                  selector: buildSelector(im),
+                                  x: cx,
+                                  y: cy,
+                                  w: Math.round(r.width),
+                                  h: Math.round(r.height),
+                                  src
+                                });
+                                if (images.length >= 40) break;
+                              }
+                              return {
+                                viewport: {
+                                  width: window.innerWidth,
+                                  height: window.innerHeight,
+                                  scroll_y: Math.round(window.scrollY),
+                                  scroll_height: Math.round(document.documentElement.scrollHeight || document.body.scrollHeight || window.innerHeight)
+                                },
+                                elements,
+                                images
+                              };
+                            })()'''
+                            snap_data = curr_page.evaluate(rich_js)
+                            if isinstance(snap_data, dict):
+                                elements_info = snap_data.get("elements") or []
+                                images_info = snap_data.get("images") or []
+                                viewport_info = snap_data.get("viewport")
+                                if elements_info:
+                                    formatted_lines.append("Interactive Elements (use 'selector' or 'x','y' with browse_click / browse_type):")
+                                    for el in elements_info:
+                                        lbl = f' "{el["label"]}"' if el.get("label") else ""
+                                        val_s = f' | value: "{el["value"]}"' if el.get("value") else ""
+                                        href_s = f' | href: {el["href"]}' if el.get("href") else ""
+                                        formatted_lines.append(
+                                            f'  [{el["id"]}] {el["role"]} (<{el["tag"]}>){lbl} | selector: {el["selector"]} | center: (x: {el["x"]}, y: {el["y"]}, size: {el["w"]}x{el["h"]}){val_s}{href_s}'
+                                        )
+                                if images_info:
+                                    formatted_lines.append("Visible Images / Canvas:")
+                                    for im in images_info:
+                                        alt_s = f' "{im["alt"]}"' if im.get("alt") else ""
+                                        src_s = f' | src: {im["src"]}' if im.get("src") else ""
+                                        formatted_lines.append(
+                                            f'  [{im["id"]}] <{im["tag"]}>{alt_s} | selector: {im["selector"]} | center: (x: {im["x"]}, y: {im["y"]}, size: {im["w"]}x{im["h"]}){src_s}'
+                                        )
+                        except Exception as snap_err:
+                            print(f"[Camoufox Snapshot Warning] Rich snapshot evaluation failed: {snap_err}", flush=True)
                         result_holder["payload"] = {
                             "status": "ok",
                             "url": curr_page.url,
                             "title": page_title,
+                            "viewport": viewport_info,
+                            "elements": elements_info,
+                            "images": images_info,
+                            "formatted_elements": "\n".join(formatted_lines),
                             "text": (text or "")[:25000]
                         }
 
@@ -1226,11 +1449,34 @@ def main():
                         result_holder["payload"] = {"status": "ok"}
 
                     elif endpoint == '/screenshot':
-                        img_bytes = curr_page.screenshot(type="png")
+                        full_page = bool(data.get('full_page') or data.get('fullPage') or False)
+                        selector = data.get('selector')
+                        if selector:
+                            loc = curr_page.locator(selector).first
+                            img_bytes = loc.screenshot(type="png", timeout=10000)
+                        else:
+                            img_bytes = curr_page.screenshot(type="png", full_page=full_page)
+                        d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
+                        os.makedirs(d_dir, exist_ok=True)
+                        ts_ms = int(time.time() * 1000)
+                        shot_filename = f"screenshot_{ts_ms}.png"
+                        shot_path = os.path.join(d_dir, shot_filename)
+                        latest_path = os.path.join(d_dir, "latest_screenshot.png")
+                        try:
+                            with open(shot_path, "wb") as sf:
+                                sf.write(img_bytes)
+                            with open(latest_path, "wb") as lf:
+                                lf.write(img_bytes)
+                        except Exception as se:
+                            print(f"[Camoufox Screenshot Warning] Failed to save PNG to {d_dir}: {se}", flush=True)
                         b64 = base64.b64encode(img_bytes).decode('utf-8')
                         page_title = safe_get_title(curr_page)
                         result_holder["payload"] = {
                             "status": "ok",
+                            "filename": shot_filename,
+                            "screenshot_path": f"/screenshots/{shot_filename}",
+                            "latest_path": "/screenshot.png",
+                            "size_bytes": len(img_bytes),
                             "image_base64": b64,
                             "url": curr_page.url,
                             "title": page_title

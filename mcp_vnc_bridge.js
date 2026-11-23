@@ -129,7 +129,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_snapshot",
-        description: "Get the title, URL and readable text of the page currently open in Docker noVNC.",
+        description: "Get the title, URL, interactive elements (buttons, links, inputs with CSS selectors and x,y coordinates), visible images, and readable text of the page currently open in Docker noVNC.",
         inputSchema: { type: "object", properties: {} },
       },
       {
@@ -237,8 +237,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_screenshot",
-        description: "Capture a screenshot of the browser window open in Docker.",
-        inputSchema: { type: "object", properties: {} },
+        description: "Capture a screenshot of the browser window open in Docker. Returns a direct HTTP PNG URL (for curl / attach_file) as well as the PNG image.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "Optional CSS selector to capture only a specific element" },
+            full_page: { type: "boolean", description: "Optional: if true, captures the full scrollable page (default: false)" },
+          },
+        },
       },
       {
         name: "browse_evaluate",
@@ -336,11 +342,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (res.error) {
         return { isError: true, content: [{ type: "text", text: `Snapshot failed: ${res.error}` }] };
       }
+      const sections = [
+        `Page Title: ${res.title}`,
+        `URL: ${res.url}`,
+      ];
+      if (res.viewport) {
+        sections.push(`Viewport: ${res.viewport.width}x${res.viewport.height} (scroll Y: ${res.viewport.scroll_y}/${res.viewport.scroll_height})`);
+      }
+      if (res.formatted_elements) {
+        sections.push(`\n${res.formatted_elements}`);
+      }
+      sections.push(`\nVisible Content:\n${res.text}`);
       return {
         content: [
           {
             type: "text",
-            text: `Page Title: ${res.title}\nURL: ${res.url}\n\nVisible Content:\n${res.text}`,
+            text: sections.join("\n"),
           },
         ],
       };
@@ -529,12 +546,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "browse_screenshot") {
-      const res = await sendCmd("/screenshot");
+      const payload = {};
+      if (args?.selector) payload.selector = args.selector;
+      if (args?.full_page !== undefined) payload.full_page = Boolean(args.full_page);
+      const res = await sendCmd("/screenshot", payload);
       if (res.error) {
         return { isError: true, content: [{ type: "text", text: `Screenshot failed: ${res.error}` }] };
       }
+      const fname = res.filename || "screenshot.png";
+      const directUrl = res.screenshot_path
+        ? `${CAMOUFOX_API_URL}${res.screenshot_path}`
+        : `${CAMOUFOX_API_URL}/screenshot.png`;
+      const latestUrl = `${CAMOUFOX_API_URL}/screenshot.png`;
+      const sizeKb = res.size_bytes ? ` (${(res.size_bytes / 1024).toFixed(1)} KB)` : "";
+      const infoText = [
+        `📸 Screenshot captured${sizeKb}: ${fname}`,
+        `Direct PNG URL: ${directUrl}`,
+        `Latest PNG URL: ${latestUrl}`,
+        `To attach or inspect this file locally in a container/shell, run:`,
+        `curl -k -sL "${directUrl}" -o /tmp/${fname}`,
+      ].join("\n");
       return {
         content: [
+          {
+            type: "text",
+            text: infoText,
+          },
           {
             type: "image",
             data: res.image_base64,
