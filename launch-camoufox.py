@@ -2177,6 +2177,48 @@ def main():
                                         "message": f"Proxy '{mask_proxy_config(parsed_proxy)}' assigned to container '{ident['name']}'."
                                     }
 
+                    elif endpoint == '/containers/delete':
+                        c_query = str(data.get('container') or data.get('name') or '').strip()
+                        if not c_query:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Parameter 'container' is required."}
+                        else:
+                            ident, all_containers = resolve_container(c_query, profile_dir)
+                            if not ident:
+                                avail = [c.get("name") for c in all_containers]
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {
+                                    "error": f"Container '{c_query}' not found. Available containers: {', '.join(avail) if avail else '(none)'}.",
+                                    "available_containers": all_containers
+                                }
+                            else:
+                                store_id = ident["cookieStoreId"]
+                                res_del = call_container_bridge(
+                                    "delete_container",
+                                    {"cookieStoreId": store_id},
+                                    timeout=10.0
+                                )
+                                if not res_del.get("ok"):
+                                    result_holder["http_status"] = 500
+                                    result_holder["payload"] = {
+                                        "error": res_del.get("error", f"Failed to delete container '{ident['name']}'")
+                                    }
+                                else:
+                                    proxies = load_container_proxies(profile_dir)
+                                    if store_id in proxies:
+                                        proxies.pop(store_id, None)
+                                        save_container_proxies(proxies, profile_dir)
+                                        call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+                                    for cp, cname in list(page_containers.items()):
+                                        if cname == ident["name"]:
+                                            del page_containers[cp]
+                                    result_holder["payload"] = {
+                                        "status": "ok",
+                                        "deleted_container": ident["name"],
+                                        "cookieStoreId": store_id,
+                                        "message": f"Container '{ident['name']}' ({store_id}) deleted."
+                                    }
+
                     elif endpoint == '/switch_tab':
                         raw_sw = data.get('index') if data.get('index') is not None else req_tab_index
                         idx = int(raw_sw or 0)

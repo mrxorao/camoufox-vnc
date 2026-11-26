@@ -364,6 +364,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "browse_delete_container",
+        description: "Delete an existing Firefox Multi-Account Container (closes its open tabs, clears its isolated cookies/storage, and removes any assigned proxy).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            container: { type: "string", description: "Existing container name, cookieStoreId, or userContextId to delete" },
+          },
+          required: ["container"],
+        },
+      },
+      {
         name: "browse_close_tab",
         description: "Close a specific browser tab by index (or session_id / active tab if omitted). Strictly enforces single-window mode.",
         inputSchema: {
@@ -742,6 +753,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         return {
           content: [{ type: "text", text: `🔌 ${res.message || `Updated proxy for container '${res.container}'.`}` }],
+        };
+      }
+
+      if (name === "browse_delete_container") {
+        const res = await sendCmd("/containers/delete", { container: args.container });
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to delete container: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `🗑️ ${res.message || `Container '${res.deleted_container}' deleted.`}` }],
         };
       }
 

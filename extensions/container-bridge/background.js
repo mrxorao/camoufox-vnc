@@ -179,6 +179,22 @@ async function handleCommand(cmd) {
     };
   }
 
+  if (action === "delete_container") {
+    const cookieStoreId = String(cmd.cookieStoreId || "").trim();
+    if (!cookieStoreId) {
+      return { ok: false, error: "Missing cookieStoreId." };
+    }
+    const removed = await browser.contextualIdentities.remove(cookieStoreId);
+    if (!removed) {
+      return { ok: false, error: `Container '${cookieStoreId}' could not be removed or does not exist.` };
+    }
+    delete proxyByCookieStoreId[cookieStoreId];
+    return {
+      ok: true,
+      container: formatIdentity(removed),
+    };
+  }
+
   if (action === "sync_proxies") {
     if (cmd.proxies && typeof cmd.proxies === "object") {
       proxyByCookieStoreId = cmd.proxies;
