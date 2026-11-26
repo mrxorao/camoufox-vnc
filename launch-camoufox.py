@@ -1506,9 +1506,13 @@ def main():
                                 status_cache["url"] = curr_page.url
                                 status_cache["title"] = page_title
                                 status_cache["tabs_count"] = len(active_pages)
+                                if req_session_id:
+                                    session_tabs[req_session_id] = curr_page
+                                page_last_touch[curr_page] = (req_session_id or req.client_id, time.time())
                                 result_holder["payload"] = {
                                     "status": "ok",
                                     "tab_index": active_tab_index,
+                                    "session_id": req_session_id,
                                     "container": ident["name"],
                                     "cookieStoreId": ident["cookieStoreId"],
                                     "proxy": ident.get("proxy"),
@@ -2203,9 +2207,13 @@ def main():
                             status_cache["url"] = curr_page.url
                             status_cache["title"] = page_title
                             status_cache["tabs_count"] = len(active_pages)
+                            if req_session_id:
+                                session_tabs[req_session_id] = curr_page
+                            page_last_touch[curr_page] = (req_session_id or req.client_id, time.time())
                             result_holder["payload"] = {
                                 "status": "ok",
                                 "tab_index": active_tab_index,
+                                "session_id": req_session_id,
                                 "container": ident["name"],
                                 "cookieStoreId": ident["cookieStoreId"],
                                 "proxy": ident.get("proxy"),
