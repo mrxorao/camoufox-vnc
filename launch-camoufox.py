@@ -1446,7 +1446,11 @@ def main():
                                             timeout=10.0
                                         )
                                     if bridge_open_res and bridge_open_res.get("ok"):
-                                        container_page = p_info.value
+                                        cand = p_info.value
+                                        new_pages = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
+                                        target_host = (urlparse(target_url).hostname or "").lower()
+                                        matched = next((p for p in reversed(new_pages) if target_host and target_host in (p.url or "").lower()), None)
+                                        container_page = matched or (new_pages[-1] if new_pages else cand)
                                 except Exception as e_exp:
                                     print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
 
@@ -1780,6 +1784,7 @@ def main():
                         y = data.get('y')
                         button = data.get('button', 'left')
                         click_count = int(data.get('click_count', 1))
+                        action_timeout = int(data.get('timeout_ms') or data.get('timeout') or 8000)
 
                         if x is not None and y is not None:
                             try:
@@ -1799,13 +1804,13 @@ def main():
                         elif selector:
                             try:
                                 loc = curr_page.locator(selector).first
-                                box = loc.bounding_box(timeout=8000)
+                                box = loc.bounding_box(timeout=action_timeout)
                                 if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
                                     target_x = box['x'] + box['width'] * random.uniform(0.25, 0.75)
                                     target_y = box['y'] + box['height'] * random.uniform(0.25, 0.75)
                                     human_mouse.click(curr_page, target_x, target_y, button=button, click_count=click_count)
                                 else:
-                                    curr_page.click(selector, timeout=10000)
+                                    curr_page.click(selector, timeout=action_timeout)
                                 page_title = safe_get_title(curr_page)
                                 result_holder["payload"] = {
                                     "status": "ok",
@@ -1918,13 +1923,14 @@ def main():
                     elif endpoint == '/type':
                         selector = data.get('selector')
                         text_val = data.get('text', '')
+                        action_timeout = int(data.get('timeout_ms') or data.get('timeout') or 8000)
                         if not selector:
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'selector' is required"}
                         else:
                             if data.get('clear', True):
-                                curr_page.fill(selector, "")
-                            curr_page.type(selector, text_val, delay=int(data.get('delay', 20)))
+                                curr_page.fill(selector, "", timeout=action_timeout)
+                            curr_page.type(selector, text_val, delay=int(data.get('delay', 20)), timeout=action_timeout)
                             result_holder["payload"] = {"status": "ok"}
 
                     elif endpoint == '/upload':
@@ -2154,7 +2160,11 @@ def main():
                                         timeout=10.0
                                     )
                                 if bridge_open_res and bridge_open_res.get("ok"):
-                                    new_p = p_info.value
+                                    cand = p_info.value
+                                    new_pages = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
+                                    target_host = (urlparse(url_t).hostname or "").lower()
+                                    matched = next((p for p in reversed(new_pages) if target_host and target_host in (p.url or "").lower()), None)
+                                    new_p = matched or (new_pages[-1] if new_pages else cand)
                             except Exception as e_exp:
                                 print(f"[Camoufox Container NewTab] expect_page notice: {e_exp}", flush=True)
 

@@ -186,6 +186,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: { type: "string", description: "CSS selector of the element to click (optional if x,y provided)" },
             x: { type: "number", description: "X coordinate in pixels (optional alternative to selector)" },
             y: { type: "number", description: "Y coordinate in pixels (optional alternative to selector)" },
+            timeout_ms: { type: "number", description: "Optional timeout in milliseconds when locating selector (default: 8000)" },
             ...TAB_ISOLATION_PROPS,
           },
         },
@@ -228,6 +229,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: { type: "string", description: "CSS selector of the field" },
             text: { type: "string", description: "Text to type" },
             clear_first: { type: "boolean", description: "Clear the field before typing" },
+            timeout_ms: { type: "number", description: "Optional timeout in milliseconds when locating selector (default: 8000)" },
             ...TAB_ISOLATION_PROPS,
           },
           required: ["selector", "text"],
@@ -560,6 +562,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.selector) payload.selector = args.selector;
         if (args.x !== undefined) payload.x = Number(args.x);
         if (args.y !== undefined) payload.y = Number(args.y);
+        if (args.timeout_ms !== undefined) payload.timeout_ms = Number(args.timeout_ms);
 
         if (!payload.selector && (payload.x === undefined || payload.y === undefined)) {
           return {
@@ -632,11 +635,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       if (name === "browse_type") {
-        const res = await sendCmd("/type", withTabIsolation({
+        const payload = withTabIsolation({
           selector: args.selector,
           text: args.text,
           clear: args.clear_first ?? true,
-        }, args));
+        }, args);
+        if (args.timeout_ms !== undefined) payload.timeout_ms = Number(args.timeout_ms);
+        const res = await sendCmd("/type", payload);
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Type failed: ${res.error}` }] };
         }
