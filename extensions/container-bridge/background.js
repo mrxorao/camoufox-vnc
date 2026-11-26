@@ -16,8 +16,116 @@ const VALID_ICONS = new Set([
 
 let API_BASE = "http://127.0.0.1:9377";
 
-// Map: cookieStoreId -> { type, host, port, username?, password?, proxyDNS?, geo?: { timezone, locale, acceptLanguage, lat, lon, country, ip } }
+// Map: cookieStoreId -> { type, host, port, username?, password?, proxyDNS?, data_saver?, geo?: { ... } }
 let proxyByCookieStoreId = {};
+
+// Count blocked requests per cookieStoreId for observability
+const blockedCountByStore = {};
+
+const SECURITY_ALLOWLIST = [
+  "challenges.cloudflare.com",
+  "hcaptcha.com",
+  "recaptcha.net",
+  "arkoselabs.com",
+  "funcaptcha.com",
+  "datadome.co",
+];
+
+const TRACKER_DOMAINS = [
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "google-analytics.com",
+  "googletagmanager.com",
+  "adservice.google.com",
+  "connect.facebook.net",
+  "analytics.tiktok.com",
+  "hotjar.com",
+  "clarity.ms",
+  "taboola.com",
+  "outbrain.com",
+  "criteo.com",
+  "criteo.net",
+  "adsrvr.org",
+  "adnxs.com",
+  "rubiconproject.com",
+  "pubmatic.com",
+  "openx.net",
+  "amazon-adsystem.com",
+  "scorecardresearch.com",
+  "quantserve.com",
+  "bing.com/bat",
+];
+
+function hostMatchesList(hostname, list) {
+  const h = (hostname || "").toLowerCase();
+  for (const dom of list) {
+    if (h === dom || h.endsWith("." + dom)) return true;
+  }
+  return false;
+}
+
+// Per-container bandwidth / data_saver blocker (cancels before opening proxy connection -> 0 bytes)
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (!details || isLocalUrl(details.url)) return {};
+    const storeId = details.cookieStoreId;
+    const cfg = storeId ? proxyByCookieStoreId[storeId] : null;
+    const mode = cfg && cfg.data_saver ? String(cfg.data_saver).toLowerCase() : "off";
+    if (!mode || mode === "off") return {};
+
+    let hostname = "";
+    try {
+      hostname = new URL(details.url).hostname.toLowerCase();
+    } catch (_) {
+      return {};
+    }
+
+    // Never block anti-bot / CAPTCHA verification domains
+    if (hostMatchesList(hostname, SECURITY_ALLOWLIST) || details.url.includes("gstatic.com/recaptcha")) {
+      return {};
+    }
+
+    const rtype = details.type || "";
+    let shouldBlock = false;
+
+    if (mode === "media") {
+      shouldBlock = rtype === "media";
+    } else if (mode === "smart") {
+      shouldBlock =
+        rtype === "media" ||
+        rtype === "beacon" ||
+        rtype === "ping" ||
+        hostMatchesList(hostname, TRACKER_DOMAINS);
+    } else if (mode === "images") {
+      shouldBlock =
+        rtype === "image" ||
+        rtype === "imageset" ||
+        rtype === "media" ||
+        rtype === "beacon" ||
+        rtype === "ping" ||
+        hostMatchesList(hostname, TRACKER_DOMAINS);
+    } else if (mode === "aggressive") {
+      shouldBlock =
+        rtype === "image" ||
+        rtype === "imageset" ||
+        rtype === "media" ||
+        rtype === "font" ||
+        rtype === "object" ||
+        rtype === "beacon" ||
+        rtype === "ping" ||
+        hostMatchesList(hostname, TRACKER_DOMAINS);
+    }
+
+    if (shouldBlock) {
+      blockedCountByStore[storeId] = (blockedCountByStore[storeId] || 0) + 1;
+      return { cancel: true };
+    }
+    return {};
+  },
+  { urls: ["<all_urls>"] },
+  ["blocking"]
+);
 
 // Prevent infinite proxy auth retry loops per requestId
 const authAttempts = new Map();
@@ -179,7 +287,10 @@ async function handleCommand(cmd) {
     const identities = await browser.contextualIdentities.query({});
     return {
       ok: true,
-      containers: identities.map(formatIdentity),
+      containers: identities.map((ident) => ({
+        ...formatIdentity(ident),
+        blocked_requests: blockedCountByStore[ident.cookieStoreId] || 0,
+      })),
     };
   }
 

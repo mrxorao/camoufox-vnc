@@ -264,6 +264,7 @@ container_proxies_lock = threading.Lock()
 
 VALID_CONTAINER_COLORS = {"blue", "turquoise", "green", "yellow", "orange", "red", "pink", "purple", "toolbar"}
 VALID_CONTAINER_ICONS = {"fingerprint", "briefcase", "dollar", "cart", "vacation", "gift", "food", "fruit", "pet", "tree", "chill", "circle", "fence"}
+VALID_DATA_SAVER_MODES = {"off", "smart", "media", "images", "aggressive"}
 
 
 def get_proxies_file(profile_dir=None):
@@ -608,6 +609,7 @@ def get_containers_list(profile_dir=None):
         pcfg = proxies.get(store_id)
         c_copy = dict(c)
         c_copy["proxy"] = mask_proxy_config(pcfg)
+        c_copy["data_saver"] = (pcfg.get("data_saver") or "off") if isinstance(pcfg, dict) else "off"
         c_copy["geo"] = pcfg.get("geo") if isinstance(pcfg, dict) else None
         enriched.append(c_copy)
     return enriched
@@ -2378,6 +2380,11 @@ def main():
                         c_timezone = data.get('timezone')
                         c_locale = data.get('locale')
                         c_auto_geo = data.get('auto_geo', True)
+                        c_data_saver = str(data.get('data_saver') or 'off').strip().lower()
+                        if c_data_saver not in VALID_DATA_SAVER_MODES:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": f"Invalid data_saver mode '{c_data_saver}'. Valid modes: {', '.join(sorted(VALID_DATA_SAVER_MODES))}."}
+                            continue
 
                         if not c_name:
                             result_holder["http_status"] = 400
@@ -2417,27 +2424,42 @@ def main():
                                     explicit_locale=c_locale,
                                     auto_geo=bool(c_auto_geo),
                                 )
-                                if (parsed_proxy or geo_profile) and store_id:
+                                if (parsed_proxy or geo_profile or c_data_saver != "off") and store_id:
                                     entry = dict(parsed_proxy) if parsed_proxy else {}
                                     if geo_profile:
                                         entry["geo"] = geo_profile
+                                    if c_data_saver != "off":
+                                        entry["data_saver"] = c_data_saver
                                     proxies = load_container_proxies(profile_dir)
                                     proxies[store_id] = entry
                                     save_container_proxies(proxies, profile_dir)
                                     call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
                                     created["proxy"] = mask_proxy_config(parsed_proxy)
                                     created["geo"] = geo_profile
+                                    created["data_saver"] = c_data_saver
                                 else:
                                     created["proxy"] = None
                                     created["geo"] = None
+                                    created["data_saver"] = "off"
                                 result_holder["payload"] = {"status": "ok", "container": created}
 
                     elif endpoint == '/containers/proxy':
                         c_query = str(data.get('container') or data.get('name') or '').strip()
+                        c_proxy_provided = 'proxy' in data
                         c_proxy_raw = data.get('proxy')
                         c_timezone = data.get('timezone')
                         c_locale = data.get('locale')
                         c_auto_geo = data.get('auto_geo', True)
+                        c_data_saver_raw = data.get('data_saver')
+                        if c_data_saver_raw is not None:
+                            c_data_saver = str(c_data_saver_raw).strip().lower()
+                            if c_data_saver not in VALID_DATA_SAVER_MODES:
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {"error": f"Invalid data_saver mode '{c_data_saver}'. Valid modes: {', '.join(sorted(VALID_DATA_SAVER_MODES))}."}
+                                continue
+                        else:
+                            c_data_saver = None
+
                         if not c_query:
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'container' is required."}
@@ -2453,53 +2475,69 @@ def main():
                             else:
                                 store_id = ident["cookieStoreId"]
                                 proxies = load_container_proxies(profile_dir)
-                                if (c_proxy_raw is None or not str(c_proxy_raw).strip()) and not c_timezone and not c_locale:
-                                    proxies.pop(store_id, None)
-                                    save_container_proxies(proxies, profile_dir)
-                                    call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
-                                    result_holder["payload"] = {
-                                        "status": "ok",
-                                        "container": ident["name"],
-                                        "cookieStoreId": store_id,
-                                        "proxy": None,
-                                        "geo": None,
-                                        "message": f"Proxy & geo overrides removed from container '{ident['name']}' (using default routing)."
-                                    }
-                                else:
-                                    parsed_proxy = None
-                                    if c_proxy_raw is not None and str(c_proxy_raw).strip():
+                                existing_entry = dict(proxies.get(store_id) or {})
+
+                                if c_proxy_provided:
+                                    if c_proxy_raw is None or not str(c_proxy_raw).strip():
+                                        for k in ("type", "host", "port", "username", "password", "proxyDNS", "geo"):
+                                            existing_entry.pop(k, None)
+                                        parsed_proxy = None
+                                    else:
                                         try:
                                             parsed_proxy = parse_proxy_url(c_proxy_raw)
                                         except ValueError as ve:
                                             result_holder["http_status"] = 400
                                             result_holder["payload"] = {"error": str(ve)}
                                             continue
+                                        for k in ("type", "host", "port", "username", "password", "proxyDNS"):
+                                            existing_entry.pop(k, None)
+                                        existing_entry.update(parsed_proxy)
+                                else:
+                                    parsed_proxy = existing_entry if existing_entry.get("host") else None
+
+                                if c_proxy_provided or c_timezone or c_locale:
                                     geo_profile = detect_proxy_geo(
                                         parsed_proxy,
                                         explicit_timezone=c_timezone,
                                         explicit_locale=c_locale,
                                         auto_geo=bool(c_auto_geo),
                                     )
-                                    entry = dict(parsed_proxy) if parsed_proxy else {}
                                     if geo_profile:
-                                        entry["geo"] = geo_profile
-                                    proxies[store_id] = entry
-                                    save_container_proxies(proxies, profile_dir)
-                                    call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
-                                    masked = mask_proxy_config(parsed_proxy)
-                                    geo_desc = ""
-                                    if geo_profile:
-                                        parts = [x for x in [geo_profile.get("country"), geo_profile.get("timezone"), geo_profile.get("locale")] if x]
-                                        if parts:
-                                            geo_desc = f" | Geo: {', '.join(parts)}"
-                                    result_holder["payload"] = {
-                                        "status": "ok",
-                                        "container": ident["name"],
-                                        "cookieStoreId": store_id,
-                                        "proxy": masked,
-                                        "geo": geo_profile,
-                                        "message": f"Proxy '{masked or 'default'}' assigned to container '{ident['name']}'{geo_desc}."
-                                    }
+                                        existing_entry["geo"] = geo_profile
+                                    elif c_proxy_provided and not parsed_proxy:
+                                        existing_entry.pop("geo", None)
+
+                                if c_data_saver is not None:
+                                    if c_data_saver == "off":
+                                        existing_entry.pop("data_saver", None)
+                                    else:
+                                        existing_entry["data_saver"] = c_data_saver
+
+                                if not existing_entry:
+                                    proxies.pop(store_id, None)
+                                else:
+                                    proxies[store_id] = existing_entry
+                                save_container_proxies(proxies, profile_dir)
+                                call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+
+                                masked = mask_proxy_config(existing_entry if existing_entry.get("host") else None)
+                                eff_geo = existing_entry.get("geo")
+                                eff_ds = existing_entry.get("data_saver") or "off"
+                                geo_desc = ""
+                                if eff_geo:
+                                    parts = [x for x in [eff_geo.get("country"), eff_geo.get("timezone"), eff_geo.get("locale")] if x]
+                                    if parts:
+                                        geo_desc = f" | Geo: {', '.join(parts)}"
+                                ds_desc = f" | Data saver: {eff_ds}" if eff_ds != "off" else ""
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "container": ident["name"],
+                                    "cookieStoreId": store_id,
+                                    "proxy": masked,
+                                    "geo": eff_geo,
+                                    "data_saver": eff_ds,
+                                    "message": f"Container '{ident['name']}' updated — Proxy: {masked or 'default'}{geo_desc}{ds_desc}."
+                                }
 
                     elif endpoint == '/containers/delete':
                         c_query = str(data.get('container') or data.get('name') or '').strip()

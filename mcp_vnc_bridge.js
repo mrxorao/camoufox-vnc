@@ -363,20 +363,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Optional manual locale override (e.g. 'pt-BR', 'pt-PT', 'en-US').",
             },
+            data_saver: {
+              type: "string",
+              enum: ["off", "smart", "media", "images", "aggressive"],
+              description: "Optional proxy bandwidth saver mode (0 bytes sent through proxy for blocked resources): 'off' (default), 'smart' (blocks media + ads/trackers, safest for anti-bot), 'media' (videos/audio only), 'images' (images + media + trackers), 'aggressive' (images + media + fonts + trackers). Never blocks CAPTCHA/Cloudflare verification domains.",
+            },
           },
           required: ["name"],
         },
       },
       {
         name: "browse_set_container_proxy",
-        description: "Assign, update, or remove a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) for an existing Firefox Multi-Account Container. Automatically detects timezone/locale from the proxy IP unless overridden.",
+        description: "Assign, update, or remove a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) and/or data_saver mode for an existing Firefox Multi-Account Container. Automatically detects timezone/locale from the proxy IP unless overridden.",
         inputSchema: {
           type: "object",
           properties: {
             container: { type: "string", description: "Existing container name, cookieStoreId, or userContextId" },
             proxy: {
               type: "string",
-              description: "Proxy URL (e.g. 'socks5://host:1080' or 'http://user:pass@host:8080'). Pass empty string '' or omit to remove the proxy and revert to default routing.",
+              description: "Proxy URL (e.g. 'socks5://host:1080' or 'http://user:pass@host:8080'). Pass empty string '' to remove the proxy; omit to keep existing proxy while updating data_saver/geo.",
             },
             auto_geo: {
               type: "boolean",
@@ -389,6 +394,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             locale: {
               type: "string",
               description: "Optional manual locale override (e.g. 'pt-BR').",
+            },
+            data_saver: {
+              type: "string",
+              enum: ["off", "smart", "media", "images", "aggressive"],
+              description: "Optional proxy bandwidth saver mode: 'off', 'smart', 'media', 'images', or 'aggressive'.",
             },
           },
           required: ["container"],
@@ -818,29 +828,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
         if (args.timezone) payload.timezone = args.timezone;
         if (args.locale) payload.locale = args.locale;
+        if (args.data_saver) payload.data_saver = args.data_saver;
         const res = await sendCmd("/containers/create", payload);
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Failed to create container: ${res.error}` }] };
         }
         const c = res.container || {};
         const proxyInfo = c.proxy ? ` | proxy: ${c.proxy}` : " | proxy: default";
+        const dsInfo = c.data_saver && c.data_saver !== "off" ? ` | data_saver: ${c.data_saver}` : "";
         const geo = c.geo || null;
         const geoInfo = geo
           ? ` | geo: ${[geo.country, geo.timezone, geo.locale, geo.ip].filter(Boolean).join(", ")}`
           : "";
         return {
-          content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}${geoInfo}).` }],
+          content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}${dsInfo}${geoInfo}).` }],
         };
       }
 
       if (name === "browse_set_container_proxy") {
-        const payload = {
-          container: args.container,
-          proxy: args.proxy !== undefined ? args.proxy : "",
-        };
+        const payload = { container: args.container };
+        if (args.proxy !== undefined) payload.proxy = args.proxy;
         if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
         if (args.timezone) payload.timezone = args.timezone;
         if (args.locale) payload.locale = args.locale;
+        if (args.data_saver) payload.data_saver = args.data_saver;
         const res = await sendCmd("/containers/proxy", payload);
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Failed to set container proxy: ${res.error}` }] };
