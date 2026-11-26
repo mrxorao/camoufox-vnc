@@ -1,0 +1,26 @@
+{
+  "manifest_version": 2,
+  "name": "Camoufox Container & Proxy Bridge",
+  "version": "1.0.0",
+  "description": "Internal bridge for Camoufox MCP to manage Firefox Multi-Account Containers and per-container proxies.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "container-bridge@camoufox.local",
+      "strict_min_version": "91.0"
+    }
+  },
+  "permissions": [
+    "contextualIdentities",
+    "cookies",
+    "tabs",
+    "proxy",
+    "webRequest",
+    "webRequestBlocking",
+    "webRequestAuthProvider",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  }
+}

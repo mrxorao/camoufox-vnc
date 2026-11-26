@@ -79,6 +79,7 @@ function tabTag(res) {
   if (!res || typeof res !== "object") return "";
   const parts = [];
   if (res.tab_index !== undefined && res.tab_index !== null) parts.push(`Tab ${res.tab_index}`);
+  if (res.container) parts.push(`container: ${res.container}`);
   if (res.session_id) parts.push(`session: ${res.session_id}`);
   return parts.length > 0 ? `[${parts.join(" | ")}] ` : "";
 }
@@ -122,7 +123,7 @@ async function sendCmd(endpoint, data = null, method = "POST") {
 const server = new Server(
   {
     name: "camoufox",
-    version: "1.1.0",
+    version: "1.2.0",
   },
   {
     capabilities: {
@@ -136,12 +137,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "browse",
-        description: "Navigate to a URL in the Docker VNC browser. Supports tab_index or session_id to isolate concurrent agents in separate tabs.",
+        description: "Navigate to a URL in the Docker VNC browser. Supports tab_index, session_id, or container (Firefox Multi-Account Container) for isolated cookies and per-container proxies.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "Target URL (e.g. 'https://example.com')" },
             new_tab: { type: "boolean", description: "If true, opens the URL in a new tab inside the current window instead of replacing the active tab." },
+            container: { type: "string", description: "Optional Firefox Multi-Account Container name (e.g. 'Personal', 'Work', 'Banking', 'Shopping' or a custom container). Returns an error listing valid containers if not found." },
             ...TAB_ISOLATION_PROPS,
           },
           required: ["url"],
@@ -149,11 +151,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_navigate",
-        description: "Navigate the active (or specified tab_index / session_id) tab to a URL inside the VNC browser.",
+        description: "Navigate the active (or specified tab_index / session_id / container) tab to a URL inside the VNC browser.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "URL to navigate to" },
+            container: { type: "string", description: "Optional Firefox Multi-Account Container name. Opens the URL in that container (error if not found)." },
             ...TAB_ISOLATION_PROPS,
           },
           required: ["url"],
@@ -305,13 +308,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_new_tab",
-        description: "Open a URL in a new tab inside the existing browser window (strictly single-window mode; never opens separate OS windows). Returns the new tab_index.",
+        description: "Open a URL in a new tab inside the existing browser window (strictly single-window mode; never opens separate OS windows). Optionally target a Firefox Multi-Account Container.",
         inputSchema: {
           type: "object",
           properties: {
             url: { type: "string", description: "New tab URL (e.g. 'https://duckduckgo.com')" },
+            container: { type: "string", description: "Optional Firefox Multi-Account Container name (e.g. 'Work', 'Banking', or custom). Returns an error listing valid containers if not found." },
             session_id: TAB_ISOLATION_PROPS.session_id,
           },
+        },
+      },
+      {
+        name: "browse_list_containers",
+        description: "List all available Firefox Multi-Account Containers (name, userContextId, cookieStoreId, color, icon, and assigned proxy if any).",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "browse_create_container",
+        description: "Create a new Firefox Multi-Account Container and optionally assign a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) to it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Unique container name (e.g. 'Brasil', 'Portugal', 'Cliente-X')" },
+            color: {
+              type: "string",
+              enum: ["blue", "turquoise", "green", "yellow", "orange", "red", "pink", "purple", "toolbar"],
+              description: "Optional container tab color (default: 'blue')",
+            },
+            icon: {
+              type: "string",
+              enum: ["fingerprint", "briefcase", "dollar", "cart", "vacation", "gift", "food", "fruit", "pet", "tree", "chill", "circle", "fence"],
+              description: "Optional container icon (default: 'fingerprint')",
+            },
+            proxy: {
+              type: "string",
+              description: "Optional dedicated proxy URL for this container (e.g. 'socks5://100.119.154.4:1080' or 'http://user:pass@host:8080'). Omit to use default routing.",
+            },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "browse_set_container_proxy",
+        description: "Assign, update, or remove a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) for an existing Firefox Multi-Account Container.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            container: { type: "string", description: "Existing container name, cookieStoreId, or userContextId" },
+            proxy: {
+              type: "string",
+              description: "Proxy URL (e.g. 'socks5://host:1080' or 'http://user:pass@host:8080'). Pass empty string '' or omit to remove the proxy and revert to default routing.",
+            },
+          },
+          required: ["container"],
         },
       },
       {
@@ -356,9 +405,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
           targetUrl = "https://" + targetUrl;
         }
+        const navPayload = { url: targetUrl };
+        if (args?.container) navPayload.container = String(args.container).trim();
 
         if (args?.new_tab) {
-          const res = await sendCmd("/new_tab", withTabIsolation({ url: targetUrl }, args));
+          const res = await sendCmd("/new_tab", withTabIsolation(navPayload, args));
           if (res.error) {
             return { isError: true, content: [{ type: "text", text: `Failed to open in new tab: ${res.error}` }] };
           }
@@ -366,7 +417,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: "text", text: `🌐 ${tabTag(res)}Opened in new tab (index ${res.tab_index}): ${res.url} (IMPORTANT: pass tab_index: ${res.tab_index} in all subsequent tool calls for this page)` }],
           };
         } else {
-          const res = await sendCmd("/navigate", withTabIsolation({ url: targetUrl }, args));
+          const res = await sendCmd("/navigate", withTabIsolation(navPayload, args));
           if (res.error) {
             return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
           }
@@ -377,7 +428,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       if (name === "browse_navigate") {
-        const res = await sendCmd("/navigate", withTabIsolation({ url: args.url }, args));
+        const navPayload = { url: args.url };
+        if (args?.container) navPayload.container = String(args.container).trim();
+        const res = await sendCmd("/navigate", withTabIsolation(navPayload, args));
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Navigation failed: ${res.error}` }] };
         }
@@ -641,12 +694,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       if (name === "browse_new_tab") {
-        const res = await sendCmd("/new_tab", withTabIsolation({ url: args?.url || "https://duckduckgo.com" }, args));
+        const payload = { url: args?.url || "https://duckduckgo.com" };
+        if (args?.container) payload.container = String(args.container).trim();
+        const res = await sendCmd("/new_tab", withTabIsolation(payload, args));
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Failed to open tab: ${res.error}` }] };
         }
         return {
           content: [{ type: "text", text: `📄 ${tabTag(res)}New tab opened in existing window (index ${res.tab_index}): ${res.url}` }],
+        };
+      }
+
+      if (name === "browse_list_containers") {
+        const res = await sendCmd("/containers");
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to list containers: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.containers, null, 2) }],
+        };
+      }
+
+      if (name === "browse_create_container") {
+        const payload = { name: args.name };
+        if (args.color) payload.color = args.color;
+        if (args.icon) payload.icon = args.icon;
+        if (args.proxy) payload.proxy = args.proxy;
+        const res = await sendCmd("/containers/create", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to create container: ${res.error}` }] };
+        }
+        const c = res.container || {};
+        const proxyInfo = c.proxy ? ` | proxy: ${c.proxy}` : " | proxy: default";
+        return {
+          content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}).` }],
+        };
+      }
+
+      if (name === "browse_set_container_proxy") {
+        const payload = {
+          container: args.container,
+          proxy: args.proxy !== undefined ? args.proxy : "",
+        };
+        const res = await sendCmd("/containers/proxy", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Failed to set container proxy: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `🔌 ${res.message || `Updated proxy for container '${res.container}'.`}` }],
         };
       }
 

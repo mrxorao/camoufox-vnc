@@ -72,6 +72,7 @@ COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 COPY launch-camoufox.py /launch-camoufox.py
 COPY launch-x11vnc.sh /launch-x11vnc.sh
+COPY extensions /opt/camoufox-extensions
 RUN chmod +x /entrypoint.sh /launch-x11vnc.sh /launch-camoufox.py
 
 # Automatic noVNC redirect (direct entry without clicking "Connect")

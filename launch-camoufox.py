@@ -10,6 +10,8 @@ import threading
 import math
 import random
 import hashlib
+import uuid
+from urllib.parse import urlparse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from camoufox.sync_api import Camoufox
 
@@ -255,6 +257,168 @@ class CommandRequest:
         self.exec_timeout = exec_timeout
 
 command_queue = queue.Queue()
+bridge_cmd_queue = queue.Queue()
+bridge_pending_lock = threading.Lock()
+bridge_pending = {}  # cmd_id -> {"event": threading.Event(), "result": None}
+container_proxies_lock = threading.Lock()
+
+VALID_CONTAINER_COLORS = {"blue", "turquoise", "green", "yellow", "orange", "red", "pink", "purple", "toolbar"}
+VALID_CONTAINER_ICONS = {"fingerprint", "briefcase", "dollar", "cart", "vacation", "gift", "food", "fruit", "pet", "tree", "chill", "circle", "fence"}
+
+
+def get_proxies_file(profile_dir=None):
+    pdir = profile_dir or os.getenv("PROFILE_DIR", "/root/profile")
+    return os.path.join(pdir, "container_proxies.json")
+
+
+def load_container_proxies(profile_dir=None):
+    fpath = get_proxies_file(profile_dir)
+    with container_proxies_lock:
+        if not os.path.exists(fpath):
+            return {}
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+
+def save_container_proxies(proxies_dict, profile_dir=None):
+    fpath = get_proxies_file(profile_dir)
+    with container_proxies_lock:
+        os.makedirs(os.path.dirname(fpath), exist_ok=True)
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(proxies_dict, f, indent=2)
+
+
+def parse_proxy_url(proxy_url):
+    """Parse proxy URL (http, https, socks5, socks, socks4) into Firefox proxyInfo dict."""
+    raw = str(proxy_url or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    scheme_map = {
+        "http": "http",
+        "https": "https",
+        "socks": "socks",
+        "socks5": "socks",
+        "socks5h": "socks",
+        "socks4": "socks4",
+        "socks4a": "socks4",
+    }
+    if scheme not in scheme_map:
+        raise ValueError(f"Unsupported proxy scheme '{scheme}'. Use http://, https://, socks5://, or socks4://")
+    if not parsed.hostname:
+        raise ValueError("Proxy URL must include a valid host")
+    if not parsed.port:
+        raise ValueError("Proxy URL must include a valid port (e.g. socks5://host:1080)")
+
+    cfg = {
+        "type": scheme_map[scheme],
+        "host": parsed.hostname,
+        "port": int(parsed.port),
+    }
+    if cfg["type"] in ("socks", "socks4"):
+        cfg["proxyDNS"] = True
+    if parsed.username is not None:
+        cfg["username"] = parsed.username
+    if parsed.password is not None:
+        cfg["password"] = parsed.password
+    return cfg
+
+
+def mask_proxy_config(cfg):
+    if not isinstance(cfg, dict) or not cfg.get("host"):
+        return None
+    scheme = "socks5" if cfg.get("type") == "socks" else cfg.get("type", "http")
+    auth = ""
+    if cfg.get("username"):
+        auth = f"{cfg['username']}:***@" if cfg.get("password") else f"{cfg['username']}@"
+    return f"{scheme}://{auth}{cfg['host']}:{cfg['port']}"
+
+
+def call_container_bridge(action, payload=None, timeout=10.0):
+    """Send a command to the internal container-bridge WebExtension and await its response."""
+    cmd_id = uuid.uuid4().hex
+    evt = threading.Event()
+    entry = {"event": evt, "result": None}
+    with bridge_pending_lock:
+        bridge_pending[cmd_id] = entry
+
+    cmd = {"id": cmd_id, "action": action}
+    if isinstance(payload, dict):
+        cmd.update(payload)
+    bridge_cmd_queue.put(cmd)
+
+    if not evt.wait(timeout=timeout):
+        with bridge_pending_lock:
+            bridge_pending.pop(cmd_id, None)
+        return {"ok": False, "error": f"Container bridge timed out waiting for '{action}' (is the extension loaded?)"}
+
+    with bridge_pending_lock:
+        bridge_pending.pop(cmd_id, None)
+    return entry.get("result") or {"ok": False, "error": "Empty response from container bridge"}
+
+
+def get_containers_list(profile_dir=None):
+    """Return list of containers from live Firefox extension (fallback to containers.json) enriched with proxy info."""
+    pdir = profile_dir or os.getenv("PROFILE_DIR", "/root/profile")
+    proxies = load_container_proxies(pdir)
+    containers = None
+
+    bridge_res = call_container_bridge("list_containers", timeout=5.0)
+    if bridge_res.get("ok") and isinstance(bridge_res.get("containers"), list):
+        containers = bridge_res["containers"]
+    else:
+        containers_path = os.path.join(pdir, "containers.json")
+        containers = []
+        if os.path.exists(containers_path):
+            try:
+                with open(containers_path, "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                for ident in cdata.get("identities", []):
+                    if not ident.get("public", True):
+                        continue
+                    uid = ident.get("userContextId")
+                    name = ident.get("name") or ident.get("l10nId") or f"Container {uid}"
+                    containers.append({
+                        "userContextId": uid,
+                        "cookieStoreId": f"firefox-container-{uid}",
+                        "name": name,
+                        "color": ident.get("color", "blue"),
+                        "icon": ident.get("icon", "fingerprint"),
+                    })
+            except Exception:
+                pass
+
+    enriched = []
+    for c in containers:
+        store_id = c.get("cookieStoreId")
+        c_copy = dict(c)
+        c_copy["proxy"] = mask_proxy_config(proxies.get(store_id))
+        enriched.append(c_copy)
+    return enriched
+
+
+def resolve_container(container_query, profile_dir=None):
+    """Find a container by name (case-insensitive), cookieStoreId, or userContextId."""
+    q = str(container_query or "").strip()
+    containers = get_containers_list(profile_dir)
+    q_low = q.lower()
+    for c in containers:
+        if str(c.get("name", "")).lower() == q_low:
+            return c, containers
+        if str(c.get("cookieStoreId", "")).lower() == q_low:
+            return c, containers
+        if c.get("userContextId") is not None and str(c.get("userContextId")) == q:
+            return c, containers
+    return None, containers
+
+
 status_cache = {
     "status": "starting",
     "browser": "camoufox",
@@ -321,6 +485,20 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
             status_copy = dict(status_cache)
             status_copy["queue_length"] = command_queue.qsize()
             return self._send_json(status_copy)
+        if clean_path == '/_bridge/proxies':
+            return self._send_json({"proxies": load_container_proxies()})
+        if clean_path == '/_bridge/poll':
+            try:
+                cmd = bridge_cmd_queue.get(timeout=20.0)
+                return self._send_json(cmd)
+            except queue.Empty:
+                self.send_response(204)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                return
+        if clean_path == '/containers':
+            containers = get_containers_list()
+            return self._send_json({"status": "ok", "containers": containers, "count": len(containers)})
         if clean_path in ('/screenshot.png', '/screenshot', '/latest_screenshot.png'):
             d_dir = os.getenv("DOWNLOADS_DIR", "/data/downloads")
             latest_fpath = os.path.join(d_dir, "latest_screenshot.png")
@@ -359,6 +537,17 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         data = self._read_body()
         endpoint = self.path
+        if endpoint == '/_bridge/result':
+            cmd_id = data.get("id")
+            res = data.get("result")
+            if cmd_id:
+                with bridge_pending_lock:
+                    entry = bridge_pending.get(cmd_id)
+                if entry:
+                    entry["result"] = res
+                    entry["event"].set()
+            return self._send_json({"ok": True})
+
         client_id = self.headers.get('X-MCP-Client-Id') or data.get('_client_id')
         if not client_id:
             client_id = f"client-{self.client_address[0]}:{self.client_address[1]}"
@@ -665,6 +854,7 @@ def main():
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
+        "xpinstall.signatures.required": False,
         # Force all links, popups and windows into tabs in the existing window (Strict Single-Window Mode)
         "browser.link.open_newwindow": 3,
         "browser.link.open_newwindow.restriction": 0,
@@ -754,6 +944,15 @@ def main():
         "canvas_noise": get_env_bool("CANVAS_NOISE", False),
         "i_know_what_im_doing": True,
     }
+    bridge_ext_dir = os.getenv("CONTAINER_BRIDGE_EXT_DIR", "/opt/camoufox-extensions/container-bridge")
+    if os.path.isdir(bridge_ext_dir):
+        try:
+            with open(os.path.join(bridge_ext_dir, "config.json"), "w", encoding="utf-8") as cfg_f:
+                json.dump({"api_port": api_port}, cfg_f)
+        except Exception as e_cfg:
+            print(f"[Camoufox Container Bridge] Warning writing config.json: {e_cfg}", flush=True)
+        camoufox_kwargs["addons"] = [bridge_ext_dir]
+        print(f"[Camoufox Container Bridge] Loaded internal extension from: {bridge_ext_dir}", flush=True)
     if proxy_config:
         camoufox_kwargs["proxy"] = proxy_config
         camoufox_kwargs["geoip"] = True
@@ -841,6 +1040,7 @@ def main():
 
             session_tabs = {}
             page_last_touch = {}
+            page_containers = {}
 
             while running:
                 try:
@@ -972,6 +1172,7 @@ def main():
                         continue
                     if endpoint == '/navigate':
                         target_url = data.get('url')
+                        req_container = str(data.get('container') or '').strip()
                         if not target_url:
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'url' is required"}
@@ -979,7 +1180,95 @@ def main():
                             if not target_url.startswith("http://") and not target_url.startswith("https://"):
                                 target_url = "https://" + target_url
                             timeout = int(data.get('timeout', 30000))
-                            
+
+                            if req_container:
+                                ident, all_containers = resolve_container(req_container, profile_dir)
+                                if not ident:
+                                    avail = [c.get("name") for c in all_containers]
+                                    result_holder["http_status"] = 400
+                                    result_holder["payload"] = {
+                                        "error": f"Container '{req_container}' not found. Available containers: {', '.join(avail) if avail else '(none)'}. Use browse_create_container to create one.",
+                                        "available_containers": all_containers
+                                    }
+                                    continue
+
+                                launcher_page = curr_page
+                                pages_before = set(browser.pages)
+                                container_page = None
+                                bridge_open_res = None
+                                proxies_snapshot = load_container_proxies(profile_dir)
+                                try:
+                                    with browser.expect_page(timeout=15000) as p_info:
+                                        bridge_open_res = call_container_bridge(
+                                            "open_tab",
+                                            {
+                                                "cookieStoreId": ident["cookieStoreId"],
+                                                "url": target_url,
+                                                "proxies": proxies_snapshot,
+                                            },
+                                            timeout=10.0
+                                        )
+                                    if bridge_open_res and bridge_open_res.get("ok"):
+                                        container_page = p_info.value
+                                except Exception as e_exp:
+                                    print(f"[Camoufox Container] expect_page notice: {e_exp}", flush=True)
+
+                                if bridge_open_res and not bridge_open_res.get("ok"):
+                                    result_holder["http_status"] = 500
+                                    result_holder["payload"] = {
+                                        "error": f"Failed to open tab in container '{ident['name']}': {bridge_open_res.get('error', 'unknown error')}"
+                                    }
+                                    continue
+
+                                if not container_page:
+                                    for _ in range(15):
+                                        candidates = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
+                                        if candidates:
+                                            container_page = candidates[-1]
+                                            break
+                                        time.sleep(0.2)
+
+                                if not container_page:
+                                    result_holder["http_status"] = 500
+                                    result_holder["payload"] = {
+                                        "error": f"Opened tab in container '{ident['name']}', but Playwright could not attach to the new tab."
+                                    }
+                                    continue
+
+                                page_containers[container_page] = ident["name"]
+                                try:
+                                    if launcher_page != container_page and not launcher_page.is_closed() and len([p for p in browser.pages if not p.is_closed()]) > 1:
+                                        launcher_page.close(run_before_unload=False)
+                                except Exception as e_close:
+                                    print(f"[Camoufox Container Warning] Failed to close previous tab: {e_close}", flush=True)
+
+                                active_pages = [p for p in browser.pages if not p.is_closed()]
+                                active_tab_index = active_pages.index(container_page) if container_page in active_pages else len(active_pages) - 1
+                                curr_page = active_pages[active_tab_index]
+                                try:
+                                    curr_page.bring_to_front()
+                                except Exception:
+                                    pass
+                                try:
+                                    curr_page.wait_for_load_state("domcontentloaded", timeout=min(timeout, 15000))
+                                except Exception:
+                                    pass
+
+                                page_title = safe_get_title(curr_page)
+                                status_cache["url"] = curr_page.url
+                                status_cache["title"] = page_title
+                                status_cache["tabs_count"] = len(active_pages)
+                                result_holder["payload"] = {
+                                    "status": "ok",
+                                    "tab_index": active_tab_index,
+                                    "container": ident["name"],
+                                    "cookieStoreId": ident["cookieStoreId"],
+                                    "proxy": ident.get("proxy"),
+                                    "url": curr_page.url,
+                                    "title": page_title
+                                }
+                                continue
+
                             is_container = ".container/" in target_url.lower()
                             launcher_page = curr_page
                             pages_before = set(browser.pages)
@@ -1581,6 +1870,90 @@ def main():
 
                     elif endpoint == '/new_tab':
                         url_t = data.get('url', 'https://duckduckgo.com')
+                        if url_t and not url_t.startswith("http://") and not url_t.startswith("https://"):
+                            url_t = "https://" + url_t
+                        req_container = str(data.get('container') or '').strip()
+
+                        if req_container:
+                            ident, all_containers = resolve_container(req_container, profile_dir)
+                            if not ident:
+                                avail = [c.get("name") for c in all_containers]
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {
+                                    "error": f"Container '{req_container}' not found. Available containers: {', '.join(avail) if avail else '(none)'}. Use browse_create_container to create one.",
+                                    "available_containers": all_containers
+                                }
+                                continue
+
+                            pages_before = set(browser.pages)
+                            new_p = None
+                            bridge_open_res = None
+                            proxies_snapshot = load_container_proxies(profile_dir)
+                            try:
+                                with browser.expect_page(timeout=15000) as p_info:
+                                    bridge_open_res = call_container_bridge(
+                                        "open_tab",
+                                        {
+                                            "cookieStoreId": ident["cookieStoreId"],
+                                            "url": url_t,
+                                            "proxies": proxies_snapshot,
+                                        },
+                                        timeout=10.0
+                                    )
+                                if bridge_open_res and bridge_open_res.get("ok"):
+                                    new_p = p_info.value
+                            except Exception as e_exp:
+                                print(f"[Camoufox Container NewTab] expect_page notice: {e_exp}", flush=True)
+
+                            if bridge_open_res and not bridge_open_res.get("ok"):
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {
+                                    "error": f"Failed to open tab in container '{ident['name']}': {bridge_open_res.get('error', 'unknown error')}"
+                                }
+                                continue
+
+                            if not new_p:
+                                for _ in range(15):
+                                    candidates = [p for p in browser.pages if p not in pages_before and not p.is_closed()]
+                                    if candidates:
+                                        new_p = candidates[-1]
+                                        break
+                                    time.sleep(0.2)
+
+                            if not new_p:
+                                result_holder["http_status"] = 500
+                                result_holder["payload"] = {
+                                    "error": f"Opened tab in container '{ident['name']}', but Playwright could not attach to the new tab."
+                                }
+                                continue
+
+                            page_containers[new_p] = ident["name"]
+                            active_pages = [p for p in browser.pages if not p.is_closed()]
+                            active_tab_index = active_pages.index(new_p) if new_p in active_pages else len(active_pages) - 1
+                            curr_page = active_pages[active_tab_index]
+                            try:
+                                curr_page.bring_to_front()
+                            except Exception:
+                                pass
+                            try:
+                                curr_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                            except Exception:
+                                pass
+                            page_title = safe_get_title(curr_page)
+                            status_cache["url"] = curr_page.url
+                            status_cache["title"] = page_title
+                            status_cache["tabs_count"] = len(active_pages)
+                            result_holder["payload"] = {
+                                "status": "ok",
+                                "tab_index": active_tab_index,
+                                "container": ident["name"],
+                                "cookieStoreId": ident["cookieStoreId"],
+                                "proxy": ident.get("proxy"),
+                                "url": curr_page.url,
+                                "title": page_title
+                            }
+                            continue
+
                         is_container = ".container/" in url_t.lower()
                         pages_before = set(browser.pages)
                         new_p = create_new_tab(browser, curr_page, url_t)
@@ -1682,6 +2055,9 @@ def main():
 
                     elif endpoint == '/tabs':
                         active_pages = [p for p in browser.pages if not p.is_closed()]
+                        for cp in list(page_containers.keys()):
+                            if cp not in active_pages:
+                                del page_containers[cp]
                         tabs_list = []
                         for idx, p in enumerate(active_pages):
                             owner_sid = next((sid for sid, sp in session_tabs.items() if sp == p), None)
@@ -1690,9 +2066,109 @@ def main():
                                 "url": p.url,
                                 "title": safe_get_title(p),
                                 "is_active": idx == active_tab_index,
-                                "session_id": owner_sid
+                                "session_id": owner_sid,
+                                "container": page_containers.get(p)
                             })
                         result_holder["payload"] = {"status": "ok", "tabs": tabs_list, "count": len(tabs_list)}
+
+                    elif endpoint == '/containers':
+                        containers = get_containers_list(profile_dir)
+                        result_holder["payload"] = {"status": "ok", "containers": containers, "count": len(containers)}
+
+                    elif endpoint == '/containers/create':
+                        c_name = str(data.get('name') or '').strip()
+                        c_color = str(data.get('color') or 'blue').strip().lower()
+                        c_icon = str(data.get('icon') or 'fingerprint').strip().lower()
+                        c_proxy_raw = data.get('proxy')
+
+                        if not c_name:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Parameter 'name' is required."}
+                        else:
+                            parsed_proxy = None
+                            if c_proxy_raw is not None and str(c_proxy_raw).strip():
+                                try:
+                                    parsed_proxy = parse_proxy_url(c_proxy_raw)
+                                except ValueError as ve:
+                                    result_holder["http_status"] = 400
+                                    result_holder["payload"] = {"error": str(ve)}
+                                    continue
+
+                            if c_color not in VALID_CONTAINER_COLORS:
+                                c_color = "blue"
+                            if c_icon not in VALID_CONTAINER_ICONS:
+                                c_icon = "fingerprint"
+
+                            res_create = call_container_bridge(
+                                "create_container",
+                                {"name": c_name, "color": c_color, "icon": c_icon},
+                                timeout=10.0
+                            )
+                            if not res_create.get("ok"):
+                                result_holder["http_status"] = 409 if res_create.get("already_exists") else 500
+                                result_holder["payload"] = {
+                                    "error": res_create.get("error", "Failed to create container"),
+                                    "container": res_create.get("container")
+                                }
+                            else:
+                                created = dict(res_create["container"])
+                                store_id = created.get("cookieStoreId")
+                                if parsed_proxy and store_id:
+                                    proxies = load_container_proxies(profile_dir)
+                                    proxies[store_id] = parsed_proxy
+                                    save_container_proxies(proxies, profile_dir)
+                                    call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+                                    created["proxy"] = mask_proxy_config(parsed_proxy)
+                                else:
+                                    created["proxy"] = None
+                                result_holder["payload"] = {"status": "ok", "container": created}
+
+                    elif endpoint == '/containers/proxy':
+                        c_query = str(data.get('container') or data.get('name') or '').strip()
+                        c_proxy_raw = data.get('proxy')
+                        if not c_query:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Parameter 'container' is required."}
+                        else:
+                            ident, all_containers = resolve_container(c_query, profile_dir)
+                            if not ident:
+                                avail = [c.get("name") for c in all_containers]
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {
+                                    "error": f"Container '{c_query}' not found. Available containers: {', '.join(avail) if avail else '(none)'}.",
+                                    "available_containers": all_containers
+                                }
+                            else:
+                                store_id = ident["cookieStoreId"]
+                                proxies = load_container_proxies(profile_dir)
+                                if c_proxy_raw is None or not str(c_proxy_raw).strip():
+                                    proxies.pop(store_id, None)
+                                    save_container_proxies(proxies, profile_dir)
+                                    call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+                                    result_holder["payload"] = {
+                                        "status": "ok",
+                                        "container": ident["name"],
+                                        "cookieStoreId": store_id,
+                                        "proxy": None,
+                                        "message": f"Proxy removed from container '{ident['name']}' (using default routing)."
+                                    }
+                                else:
+                                    try:
+                                        parsed_proxy = parse_proxy_url(c_proxy_raw)
+                                    except ValueError as ve:
+                                        result_holder["http_status"] = 400
+                                        result_holder["payload"] = {"error": str(ve)}
+                                        continue
+                                    proxies[store_id] = parsed_proxy
+                                    save_container_proxies(proxies, profile_dir)
+                                    call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+                                    result_holder["payload"] = {
+                                        "status": "ok",
+                                        "container": ident["name"],
+                                        "cookieStoreId": store_id,
+                                        "proxy": mask_proxy_config(parsed_proxy),
+                                        "message": f"Proxy '{mask_proxy_config(parsed_proxy)}' assigned to container '{ident['name']}'."
+                                    }
 
                     elif endpoint == '/switch_tab':
                         raw_sw = data.get('index') if data.get('index') is not None else req_tab_index
