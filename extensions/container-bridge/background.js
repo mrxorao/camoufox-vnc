@@ -2,7 +2,7 @@
  * Camoufox Container & Proxy Bridge (WebExtension MV2)
  *
  * Bridges Camoufox's local HTTP control API (default http://127.0.0.1:9377)
- * with Firefox's native contextualIdentities, tabs, and proxy APIs.
+ * with Firefox's native contextualIdentities, tabs, cookies, proxy, and header APIs.
  */
 
 const VALID_COLORS = new Set([
@@ -16,7 +16,7 @@ const VALID_ICONS = new Set([
 
 let API_BASE = "http://127.0.0.1:9377";
 
-// Map: cookieStoreId (e.g. "firefox-container-2") -> { type, host, port, username?, password?, proxyDNS? }
+// Map: cookieStoreId -> { type, host, port, username?, password?, proxyDNS?, geo?: { timezone, locale, acceptLanguage, lat, lon, country, ip } }
 let proxyByCookieStoreId = {};
 
 // Prevent infinite proxy auth retry loops per requestId
@@ -78,6 +78,25 @@ browser.proxy.onRequest.addListener(
   { urls: ["<all_urls>"] }
 );
 
+// Per-container Accept-Language header matching proxy geo locale
+browser.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    if (!details || isLocalUrl(details.url)) return {};
+    const storeId = details.cookieStoreId;
+    const cfg = storeId ? proxyByCookieStoreId[storeId] : null;
+    const acceptLang = cfg && cfg.geo && cfg.geo.acceptLanguage;
+    if (!acceptLang || !Array.isArray(details.requestHeaders)) return {};
+
+    const headers = details.requestHeaders.filter(
+      (h) => (h.name || "").toLowerCase() !== "accept-language"
+    );
+    headers.push({ name: "Accept-Language", value: acceptLang });
+    return { requestHeaders: headers };
+  },
+  { urls: ["<all_urls>"] },
+  ["blocking", "requestHeaders"]
+);
+
 // HTTP/HTTPS proxy authentication per container
 browser.webRequest.onAuthRequired.addListener(
   (details) => {
@@ -118,6 +137,16 @@ browser.webRequest.onErrorOccurred.addListener(
   { urls: ["<all_urls>"] }
 );
 
+// Content script asks for current tab's container geo profile
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg && msg.type === "get_tab_geo") {
+    const storeId = sender && sender.tab && sender.tab.cookieStoreId;
+    const cfg = storeId ? proxyByCookieStoreId[storeId] : null;
+    return Promise.resolve({ geo: (cfg && cfg.geo) || null });
+  }
+  return undefined;
+});
+
 function formatIdentity(ident) {
   const match = /^firefox-container-(\d+)$/.exec(ident.cookieStoreId || "");
   return {
@@ -151,6 +180,29 @@ async function handleCommand(cmd) {
     return {
       ok: true,
       containers: identities.map(formatIdentity),
+    };
+  }
+
+  if (action === "list_tabs") {
+    const [tabs, identities] = await Promise.all([
+      browser.tabs.query({}),
+      browser.contextualIdentities.query({}),
+    ]);
+    const nameByStore = {};
+    for (const ident of identities) {
+      nameByStore[ident.cookieStoreId] = ident.name;
+    }
+    return {
+      ok: true,
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        index: t.index,
+        url: t.url,
+        title: t.title,
+        active: t.active,
+        cookieStoreId: t.cookieStoreId,
+        container: nameByStore[t.cookieStoreId] || null,
+      })),
     };
   }
 
@@ -228,6 +280,76 @@ async function handleCommand(cmd) {
       tabId: tab.id,
       cookieStoreId: tab.cookieStoreId,
       url: tab.url || targetUrl,
+    };
+  }
+
+  if (action === "get_cookies") {
+    const storeId = String(cmd.cookieStoreId || "firefox-default");
+    const query = { storeId };
+    if (cmd.domain) query.domain = String(cmd.domain);
+    if (cmd.url) query.url = String(cmd.url);
+    const cookies = await browser.cookies.getAll(query);
+    return {
+      ok: true,
+      cookieStoreId: storeId,
+      count: cookies.length,
+      cookies: cookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: c.expirationDate,
+      })),
+    };
+  }
+
+  if (action === "set_cookie") {
+    const storeId = String(cmd.cookieStoreId || "firefox-default");
+    const details = {
+      storeId,
+      url: String(cmd.url || ""),
+      name: String(cmd.name || ""),
+      value: String(cmd.value || ""),
+    };
+    if (!details.url || !details.name) {
+      return { ok: false, error: "Parameters 'url' and 'name' are required to set a cookie." };
+    }
+    if (cmd.domain) details.domain = String(cmd.domain);
+    if (cmd.path) details.path = String(cmd.path);
+    if (cmd.secure !== undefined) details.secure = Boolean(cmd.secure);
+    if (cmd.httpOnly !== undefined) details.httpOnly = Boolean(cmd.httpOnly);
+    if (cmd.expirationDate !== undefined) details.expirationDate = Number(cmd.expirationDate);
+    const setRes = await browser.cookies.set(details);
+    return { ok: true, cookie: setRes };
+  }
+
+  if (action === "clear_cookies") {
+    const storeId = String(cmd.cookieStoreId || "firefox-default");
+    const query = { storeId };
+    if (cmd.domain) query.domain = String(cmd.domain);
+    if (cmd.url) query.url = String(cmd.url);
+    const cookies = await browser.cookies.getAll(query);
+    let removedCount = 0;
+    for (const c of cookies) {
+      const proto = c.secure ? "https://" : "http://";
+      const cleanDomain = (c.domain || "").replace(/^\./, "");
+      const cookieUrl = `${proto}${cleanDomain}${c.path || "/"}`;
+      try {
+        await browser.cookies.remove({
+          url: cookieUrl,
+          name: c.name,
+          storeId,
+        });
+        removedCount++;
+      } catch (_) {}
+    }
+    return {
+      ok: true,
+      cookieStoreId: storeId,
+      removed_count: removedCount,
     };
   }
 

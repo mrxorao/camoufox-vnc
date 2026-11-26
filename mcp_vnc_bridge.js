@@ -87,12 +87,17 @@ function tabTag(res) {
 async function sendCmd(endpoint, data = null, method = "POST") {
   const url = `${CAMOUFOX_API_URL}${endpoint}`;
   const clientIdHeader = (data && data.session_id) ? `${CLIENT_ID}:${data.session_id}` : CLIENT_ID;
+  const headers = {
+    "Content-Type": "application/json",
+    "X-MCP-Client-Id": clientIdHeader,
+  };
+  const apiKey = (process.env.CAMOUFOX_API_KEY || "").trim();
+  if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
   const options = {
     method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-MCP-Client-Id": clientIdHeader,
-    },
+    headers,
   };
   if (data !== null) {
     options.body = JSON.stringify(data);
@@ -123,7 +128,7 @@ async function sendCmd(endpoint, data = null, method = "POST") {
 const server = new Server(
   {
     name: "camoufox",
-    version: "1.2.0",
+    version: "1.3.0",
   },
   {
     capabilities: {
@@ -325,7 +330,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "browse_create_container",
-        description: "Create a new Firefox Multi-Account Container and optionally assign a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) to it.",
+        description: "Create a new Firefox Multi-Account Container and optionally assign a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4). Automatically detects the proxy's IP location to set matching timezone, locale, Accept-Language and geolocation (unless overridden).",
         inputSchema: {
           type: "object",
           properties: {
@@ -344,13 +349,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Optional dedicated proxy URL for this container (e.g. 'socks5://100.119.154.4:1080' or 'http://user:pass@host:8080'). Omit to use default routing.",
             },
+            auto_geo: {
+              type: "boolean",
+              description: "If true (default), automatically detects timezone/locale/geolocation from the proxy exit IP.",
+            },
+            timezone: {
+              type: "string",
+              description: "Optional manual IANA timezone override (e.g. 'America/Sao_Paulo', 'Europe/Lisbon').",
+            },
+            locale: {
+              type: "string",
+              description: "Optional manual locale override (e.g. 'pt-BR', 'pt-PT', 'en-US').",
+            },
           },
           required: ["name"],
         },
       },
       {
         name: "browse_set_container_proxy",
-        description: "Assign, update, or remove a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) for an existing Firefox Multi-Account Container.",
+        description: "Assign, update, or remove a dedicated proxy (HTTP, HTTPS, SOCKS5, SOCKS4) for an existing Firefox Multi-Account Container. Automatically detects timezone/locale from the proxy IP unless overridden.",
         inputSchema: {
           type: "object",
           properties: {
@@ -358,6 +375,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             proxy: {
               type: "string",
               description: "Proxy URL (e.g. 'socks5://host:1080' or 'http://user:pass@host:8080'). Pass empty string '' or omit to remove the proxy and revert to default routing.",
+            },
+            auto_geo: {
+              type: "boolean",
+              description: "If true (default), automatically detects timezone/locale/geolocation from the proxy exit IP.",
+            },
+            timezone: {
+              type: "string",
+              description: "Optional manual IANA timezone override (e.g. 'America/Sao_Paulo').",
+            },
+            locale: {
+              type: "string",
+              description: "Optional manual locale override (e.g. 'pt-BR').",
             },
           },
           required: ["container"],
@@ -372,6 +401,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             container: { type: "string", description: "Existing container name, cookieStoreId, or userContextId to delete" },
           },
           required: ["container"],
+        },
+      },
+      {
+        name: "browse_wait",
+        description: "Wait for a CSS selector, visible text, or page load state ('networkidle', 'load', 'domcontentloaded') before continuing.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "Optional CSS selector to wait for" },
+            text: { type: "string", description: "Optional visible text to wait for on the page" },
+            state: { type: "string", enum: ["visible", "attached", "hidden", "detached"], description: "Element state when waiting for selector (default: 'visible')" },
+            load_state: { type: "string", enum: ["networkidle", "load", "domcontentloaded"], description: "Page load state if neither selector nor text is provided (default: 'networkidle')" },
+            timeout_ms: { type: "number", description: "Timeout in milliseconds (default: 15000)" },
+            ...TAB_ISOLATION_PROPS,
+          },
+        },
+      },
+      {
+        name: "browse_select",
+        description: "Select an option in an HTML <select> dropdown by value, visible label, or zero-based index.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector of the <select> element" },
+            value: { type: "string", description: "Option value attribute to select" },
+            label: { type: "string", description: "Visible option label text to select" },
+            index: { type: "number", description: "Zero-based option index to select" },
+            ...TAB_ISOLATION_PROPS,
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "browse_cookies",
+        description: "Get, set, or clear cookies isolated to a specific Firefox Multi-Account Container (or default profile if container is omitted).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["get", "set", "clear"], description: "Cookie action: 'get', 'set', or 'clear'" },
+            container: { type: "string", description: "Optional container name (e.g. 'Work', 'Brasil'). Omit for default profile." },
+            domain: { type: "string", description: "Optional domain filter (for get/clear) or cookie domain (for set)" },
+            url: { type: "string", description: "URL associated with the cookie (required for 'set', optional filter for 'get'/'clear')" },
+            name: { type: "string", description: "Cookie name (required for 'set')" },
+            value: { type: "string", description: "Cookie value (for 'set')" },
+            path: { type: "string", description: "Cookie path (optional, for 'set')" },
+            secure: { type: "boolean", description: "Secure flag (optional, for 'set')" },
+            httpOnly: { type: "boolean", description: "HttpOnly flag (optional, for 'set')" },
+            expirationDate: { type: "number", description: "Unix timestamp in seconds (optional, for 'set')" },
+          },
+          required: ["action"],
         },
       },
       {
@@ -731,14 +810,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.color) payload.color = args.color;
         if (args.icon) payload.icon = args.icon;
         if (args.proxy) payload.proxy = args.proxy;
+        if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
+        if (args.timezone) payload.timezone = args.timezone;
+        if (args.locale) payload.locale = args.locale;
         const res = await sendCmd("/containers/create", payload);
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Failed to create container: ${res.error}` }] };
         }
         const c = res.container || {};
         const proxyInfo = c.proxy ? ` | proxy: ${c.proxy}` : " | proxy: default";
+        const geo = c.geo || null;
+        const geoInfo = geo
+          ? ` | geo: ${[geo.country, geo.timezone, geo.locale, geo.ip].filter(Boolean).join(", ")}`
+          : "";
         return {
-          content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}).` }],
+          content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}${geoInfo}).` }],
         };
       }
 
@@ -747,6 +833,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           container: args.container,
           proxy: args.proxy !== undefined ? args.proxy : "",
         };
+        if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
+        if (args.timezone) payload.timezone = args.timezone;
+        if (args.locale) payload.locale = args.locale;
         const res = await sendCmd("/containers/proxy", payload);
         if (res.error) {
           return { isError: true, content: [{ type: "text", text: `Failed to set container proxy: ${res.error}` }] };
@@ -763,6 +852,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         return {
           content: [{ type: "text", text: `🗑️ ${res.message || `Container '${res.deleted_container}' deleted.`}` }],
+        };
+      }
+
+      if (name === "browse_wait") {
+        const payload = withTabIsolation({}, args);
+        if (args?.selector) payload.selector = args.selector;
+        if (args?.text) payload.text = args.text;
+        if (args?.state) payload.state = args.state;
+        if (args?.load_state) payload.load_state = args.load_state;
+        if (args?.timeout_ms !== undefined) payload.timeout_ms = Number(args.timeout_ms);
+        const res = await sendCmd("/wait", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Wait failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `⏳ ${tabTag(res)}Condition satisfied (${res.waited_for}) on ${res.url}.` }],
+        };
+      }
+
+      if (name === "browse_select") {
+        const payload = withTabIsolation({ selector: args.selector }, args);
+        if (args.value !== undefined) payload.value = args.value;
+        if (args.label !== undefined) payload.label = args.label;
+        if (args.index !== undefined) payload.index = Number(args.index);
+        const res = await sendCmd("/select", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Select failed: ${res.error}` }] };
+        }
+        return {
+          content: [{ type: "text", text: `✅ ${tabTag(res)}Selected ${JSON.stringify(res.selected)} in '${args.selector}'.` }],
+        };
+      }
+
+      if (name === "browse_cookies") {
+        const payload = { action: args.action };
+        for (const k of ["container", "domain", "url", "name", "value", "path", "secure", "httpOnly", "expirationDate"]) {
+          if (args[k] !== undefined) payload[k] = args[k];
+        }
+        const res = await sendCmd("/cookies", payload);
+        if (res.error) {
+          return { isError: true, content: [{ type: "text", text: `Cookies operation failed: ${res.error}` }] };
+        }
+        if (args.action === "get") {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ container: res.container, count: res.count, cookies: res.cookies }, null, 2) }],
+          };
+        }
+        if (args.action === "clear") {
+          return {
+            content: [{ type: "text", text: `🧹 Cleared ${res.removed_count} cookie(s) in container '${res.container}'.` }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: `🍪 Cookie '${args.name}' set in container '${res.container}'.` }],
         };
       }
 

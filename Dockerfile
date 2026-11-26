@@ -80,4 +80,7 @@ COPY novnc-index.html /usr/share/novnc/index.html
 
 EXPOSE 5800 5900 9377
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:9377/health || exit 1
+
 ENTRYPOINT ["/entrypoint.sh"]

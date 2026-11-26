@@ -341,6 +341,132 @@ def mask_proxy_config(cfg):
     return f"{scheme}://{auth}{cfg['host']}:{cfg['port']}"
 
 
+COUNTRY_TO_LOCALE = {
+    "PT": "pt-PT", "BR": "pt-BR", "ES": "es-ES", "AR": "es-AR", "MX": "es-MX",
+    "CO": "es-CO", "CL": "es-CL", "US": "en-US", "GB": "en-GB", "UK": "en-GB",
+    "CA": "en-CA", "AU": "en-AU", "IE": "en-IE", "FR": "fr-FR", "BE": "fr-BE",
+    "CH": "de-CH", "DE": "de-DE", "AT": "de-AT", "IT": "it-IT", "NL": "nl-NL",
+    "PL": "pl-PL", "SE": "sv-SE", "NO": "nb-NO", "DK": "da-DK", "FI": "fi-FI",
+    "JP": "ja-JP", "KR": "ko-KR", "CN": "zh-CN", "IN": "en-IN", "RU": "ru-RU",
+    "TR": "tr-TR", "ZA": "en-ZA", "AO": "pt-AO", "MZ": "pt-MZ",
+}
+
+
+def build_accept_language(locale_str):
+    if not locale_str:
+        return None
+    loc = str(locale_str).strip()
+    base = loc.split("-")[0]
+    if base.lower() == "en":
+        return f"{loc},{base};q=0.9"
+    return f"{loc},{base};q=0.9,en-US;q=0.8,en;q=0.7"
+
+
+def build_requests_proxy_url(cfg):
+    if not isinstance(cfg, dict) or not cfg.get("host"):
+        return None
+    ptype = cfg.get("type", "http")
+    scheme = "socks5h" if ptype == "socks" else ("socks4a" if ptype == "socks4" else ptype)
+    auth = ""
+    if cfg.get("username"):
+        auth = f"{cfg['username']}:{cfg.get('password', '')}@"
+    return f"{scheme}://{auth}{cfg['host']}:{cfg['port']}"
+
+
+def detect_proxy_geo(proxy_cfg, explicit_timezone=None, explicit_locale=None, auto_geo=True):
+    """Auto-detect IP, country, timezone, locale and coordinates through the container's proxy."""
+    geo = {}
+    if auto_geo and isinstance(proxy_cfg, dict) and proxy_cfg.get("host"):
+        try:
+            import requests
+            purl = build_requests_proxy_url(proxy_cfg)
+            proxies_arg = {"http": purl, "https": purl}
+            info = None
+            try:
+                r = requests.get(
+                    "http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,lat,lon,timezone,query",
+                    proxies=proxies_arg,
+                    timeout=10,
+                )
+                if r.ok:
+                    j = r.json()
+                    if j.get("status") == "success":
+                        info = {
+                            "ip": j.get("query"),
+                            "country": j.get("country"),
+                            "countryCode": (j.get("countryCode") or "").upper(),
+                            "city": j.get("city"),
+                            "timezone": j.get("timezone"),
+                            "lat": j.get("lat"),
+                            "lon": j.get("lon"),
+                        }
+            except Exception as e1:
+                print(f"[Camoufox GeoIP] ip-api.com failed ({e1}), trying ipwho.is...", flush=True)
+
+            if not info:
+                try:
+                    r2 = requests.get("https://ipwho.is/", proxies=proxies_arg, timeout=10)
+                    if r2.ok:
+                        j2 = r2.json()
+                        if j2.get("success", True):
+                            tz_obj = j2.get("timezone")
+                            tz_id = tz_obj.get("id") if isinstance(tz_obj, dict) else tz_obj
+                            info = {
+                                "ip": j2.get("ip"),
+                                "country": j2.get("country"),
+                                "countryCode": (j2.get("country_code") or "").upper(),
+                                "city": j2.get("city"),
+                                "timezone": tz_id,
+                                "lat": j2.get("latitude"),
+                                "lon": j2.get("longitude"),
+                            }
+                except Exception as e2:
+                    print(f"[Camoufox GeoIP] ipwho.is failed: {e2}", flush=True)
+
+            if info:
+                geo.update({k: v for k, v in info.items() if v is not None})
+                cc = info.get("countryCode", "")
+                if cc and cc in COUNTRY_TO_LOCALE:
+                    geo["locale"] = COUNTRY_TO_LOCALE[cc]
+        except Exception as ge:
+            print(f"[Camoufox GeoIP Warning] Could not auto-detect geo for proxy: {ge}", flush=True)
+
+    if explicit_timezone:
+        geo["timezone"] = str(explicit_timezone).strip()
+    if explicit_locale:
+        geo["locale"] = str(explicit_locale).strip()
+
+    if geo.get("locale"):
+        loc = geo["locale"]
+        base = loc.split("-")[0]
+        geo["languages"] = [loc, base] if base != loc else [loc]
+        geo["acceptLanguage"] = build_accept_language(loc)
+
+    return geo if geo else None
+
+
+def cleanup_old_screenshots(d_dir, max_files=None):
+    try:
+        limit = max_files if max_files is not None else int(os.getenv("SCREENSHOT_MAX_FILES", "50"))
+        if limit <= 0:
+            return
+        shots = [
+            os.path.join(d_dir, f)
+            for f in os.listdir(d_dir)
+            if f.startswith("screenshot_") and f.endswith(".png")
+        ]
+        if len(shots) <= limit:
+            return
+        shots.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for old_p in shots[limit:]:
+            try:
+                os.remove(old_p)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def call_container_bridge(action, payload=None, timeout=10.0):
     """Send a command to the internal container-bridge WebExtension and await its response."""
     cmd_id = uuid.uuid4().hex
@@ -398,8 +524,10 @@ def get_containers_list(profile_dir=None):
     enriched = []
     for c in containers:
         store_id = c.get("cookieStoreId")
+        pcfg = proxies.get(store_id)
         c_copy = dict(c)
-        c_copy["proxy"] = mask_proxy_config(proxies.get(store_id))
+        c_copy["proxy"] = mask_proxy_config(pcfg)
+        c_copy["geo"] = pcfg.get("geo") if isinstance(pcfg, dict) else None
         enriched.append(c_copy)
     return enriched
 
@@ -448,8 +576,22 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-MCP-Client-Id')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-MCP-Client-Id, Authorization, X-API-Key')
         self.end_headers()
+
+    def _is_authorized(self, clean_path):
+        api_key = os.getenv("CAMOUFOX_API_KEY", "").strip()
+        if not api_key:
+            return True
+        if clean_path in ('/health', '/'):
+            return True
+        if clean_path.startswith('/_bridge/') and self.client_address[0] in ('127.0.0.1', '::1'):
+            return True
+        req_key = (self.headers.get('X-API-Key') or '').strip()
+        auth_hdr = (self.headers.get('Authorization') or '').strip()
+        if auth_hdr.lower().startswith('bearer '):
+            req_key = auth_hdr[7:].strip()
+        return req_key == api_key
 
     def _read_body(self):
         content_length = int(self.headers.get('Content-Length', 0))
@@ -481,6 +623,8 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
 
     def _handle_get_or_head(self, head_only=False):
         clean_path = self.path.split('?')[0]
+        if not self._is_authorized(clean_path):
+            return self._send_json({"error": "Unauthorized: invalid or missing API key"}, 401)
         if clean_path in ('/health', '/', '/status'):
             status_copy = dict(status_cache)
             status_copy["queue_length"] = command_queue.qsize()
@@ -535,8 +679,11 @@ class CamoufoxAPIHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Endpoint not found"}, 404)
 
     def do_POST(self):
+        clean_path = self.path.split('?')[0]
+        if not self._is_authorized(clean_path):
+            return self._send_json({"error": "Unauthorized: invalid or missing API key"}, 401)
         data = self._read_body()
-        endpoint = self.path
+        endpoint = clean_path
         if endpoint == '/_bridge/result':
             cmd_id = data.get("id")
             res = data.get("result")
@@ -855,13 +1002,15 @@ def main():
         "browser.search.suggest.enabled": True,
         "browser.urlbar.suggest.searches": True,
         "keyword.enabled": True,
-        # Multi-Account Containers
+        # Multi-Account Containers & WebRTC leak protection
         "privacy.userContext.enabled": True,
         "privacy.userContext.ui.enabled": True,
         "privacy.userContext.longPressBehavior": 2,
         "privacy.userContext.newTabContainerOnLeftClick.enabled": True,
         "privacy.userContext.extension": "@testpilot-containers",
         "xpinstall.signatures.required": False,
+        "media.peerconnection.ice.default_address_only": True,
+        "media.peerconnection.ice.proxy_only_if_behind_proxy": True,
         # Force all links, popups and windows into tabs in the existing window (Strict Single-Window Mode)
         "browser.link.open_newwindow": 3,
         "browser.link.open_newwindow.restriction": 0,
@@ -1851,6 +2000,7 @@ def main():
                                 sf.write(img_bytes)
                             with open(latest_path, "wb") as lf:
                                 lf.write(img_bytes)
+                            cleanup_old_screenshots(d_dir)
                         except Exception as se:
                             print(f"[Camoufox Screenshot Warning] Failed to save PNG to {d_dir}: {se}", flush=True)
                         b64 = base64.b64encode(img_bytes).decode('utf-8')
@@ -2065,16 +2215,33 @@ def main():
                         for cp in list(page_containers.keys()):
                             if cp not in active_pages:
                                 del page_containers[cp]
+                        ext_tabs = []
+                        ext_res = call_container_bridge("list_tabs", timeout=3.0)
+                        if ext_res.get("ok") and isinstance(ext_res.get("tabs"), list):
+                            ext_tabs = ext_res["tabs"]
                         tabs_list = []
                         for idx, p in enumerate(active_pages):
                             owner_sid = next((sid for sid, sp in session_tabs.items() if sp == p), None)
+                            c_name = page_containers.get(p)
+                            c_store = None
+                            if idx < len(ext_tabs) and ext_tabs[idx].get("url") == p.url:
+                                c_store = ext_tabs[idx].get("cookieStoreId")
+                                if ext_tabs[idx].get("container"):
+                                    c_name = ext_tabs[idx]["container"]
+                            else:
+                                match_t = next((t for t in ext_tabs if t.get("url") == p.url), None)
+                                if match_t:
+                                    c_store = match_t.get("cookieStoreId")
+                                    if match_t.get("container"):
+                                        c_name = match_t["container"]
                             tabs_list.append({
                                 "index": idx,
                                 "url": p.url,
                                 "title": safe_get_title(p),
                                 "is_active": idx == active_tab_index,
                                 "session_id": owner_sid,
-                                "container": page_containers.get(p)
+                                "container": c_name,
+                                "cookieStoreId": c_store
                             })
                         result_holder["payload"] = {"status": "ok", "tabs": tabs_list, "count": len(tabs_list)}
 
@@ -2087,6 +2254,9 @@ def main():
                         c_color = str(data.get('color') or 'blue').strip().lower()
                         c_icon = str(data.get('icon') or 'fingerprint').strip().lower()
                         c_proxy_raw = data.get('proxy')
+                        c_timezone = data.get('timezone')
+                        c_locale = data.get('locale')
+                        c_auto_geo = data.get('auto_geo', True)
 
                         if not c_name:
                             result_holder["http_status"] = 400
@@ -2120,19 +2290,33 @@ def main():
                             else:
                                 created = dict(res_create["container"])
                                 store_id = created.get("cookieStoreId")
-                                if parsed_proxy and store_id:
+                                geo_profile = detect_proxy_geo(
+                                    parsed_proxy,
+                                    explicit_timezone=c_timezone,
+                                    explicit_locale=c_locale,
+                                    auto_geo=bool(c_auto_geo),
+                                )
+                                if (parsed_proxy or geo_profile) and store_id:
+                                    entry = dict(parsed_proxy) if parsed_proxy else {}
+                                    if geo_profile:
+                                        entry["geo"] = geo_profile
                                     proxies = load_container_proxies(profile_dir)
-                                    proxies[store_id] = parsed_proxy
+                                    proxies[store_id] = entry
                                     save_container_proxies(proxies, profile_dir)
                                     call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
                                     created["proxy"] = mask_proxy_config(parsed_proxy)
+                                    created["geo"] = geo_profile
                                 else:
                                     created["proxy"] = None
+                                    created["geo"] = None
                                 result_holder["payload"] = {"status": "ok", "container": created}
 
                     elif endpoint == '/containers/proxy':
                         c_query = str(data.get('container') or data.get('name') or '').strip()
                         c_proxy_raw = data.get('proxy')
+                        c_timezone = data.get('timezone')
+                        c_locale = data.get('locale')
+                        c_auto_geo = data.get('auto_geo', True)
                         if not c_query:
                             result_holder["http_status"] = 400
                             result_holder["payload"] = {"error": "Parameter 'container' is required."}
@@ -2148,7 +2332,7 @@ def main():
                             else:
                                 store_id = ident["cookieStoreId"]
                                 proxies = load_container_proxies(profile_dir)
-                                if c_proxy_raw is None or not str(c_proxy_raw).strip():
+                                if (c_proxy_raw is None or not str(c_proxy_raw).strip()) and not c_timezone and not c_locale:
                                     proxies.pop(store_id, None)
                                     save_container_proxies(proxies, profile_dir)
                                     call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
@@ -2157,24 +2341,43 @@ def main():
                                         "container": ident["name"],
                                         "cookieStoreId": store_id,
                                         "proxy": None,
-                                        "message": f"Proxy removed from container '{ident['name']}' (using default routing)."
+                                        "geo": None,
+                                        "message": f"Proxy & geo overrides removed from container '{ident['name']}' (using default routing)."
                                     }
                                 else:
-                                    try:
-                                        parsed_proxy = parse_proxy_url(c_proxy_raw)
-                                    except ValueError as ve:
-                                        result_holder["http_status"] = 400
-                                        result_holder["payload"] = {"error": str(ve)}
-                                        continue
-                                    proxies[store_id] = parsed_proxy
+                                    parsed_proxy = None
+                                    if c_proxy_raw is not None and str(c_proxy_raw).strip():
+                                        try:
+                                            parsed_proxy = parse_proxy_url(c_proxy_raw)
+                                        except ValueError as ve:
+                                            result_holder["http_status"] = 400
+                                            result_holder["payload"] = {"error": str(ve)}
+                                            continue
+                                    geo_profile = detect_proxy_geo(
+                                        parsed_proxy,
+                                        explicit_timezone=c_timezone,
+                                        explicit_locale=c_locale,
+                                        auto_geo=bool(c_auto_geo),
+                                    )
+                                    entry = dict(parsed_proxy) if parsed_proxy else {}
+                                    if geo_profile:
+                                        entry["geo"] = geo_profile
+                                    proxies[store_id] = entry
                                     save_container_proxies(proxies, profile_dir)
                                     call_container_bridge("sync_proxies", {"proxies": proxies}, timeout=5.0)
+                                    masked = mask_proxy_config(parsed_proxy)
+                                    geo_desc = ""
+                                    if geo_profile:
+                                        parts = [x for x in [geo_profile.get("country"), geo_profile.get("timezone"), geo_profile.get("locale")] if x]
+                                        if parts:
+                                            geo_desc = f" | Geo: {', '.join(parts)}"
                                     result_holder["payload"] = {
                                         "status": "ok",
                                         "container": ident["name"],
                                         "cookieStoreId": store_id,
-                                        "proxy": mask_proxy_config(parsed_proxy),
-                                        "message": f"Proxy '{mask_proxy_config(parsed_proxy)}' assigned to container '{ident['name']}'."
+                                        "proxy": masked,
+                                        "geo": geo_profile,
+                                        "message": f"Proxy '{masked or 'default'}' assigned to container '{ident['name']}'{geo_desc}."
                                     }
 
                     elif endpoint == '/containers/delete':
@@ -2218,6 +2421,100 @@ def main():
                                         "cookieStoreId": store_id,
                                         "message": f"Container '{ident['name']}' ({store_id}) deleted."
                                     }
+
+                    elif endpoint == '/wait':
+                        selector = data.get('selector')
+                        text_wait = data.get('text')
+                        state = str(data.get('state') or 'visible').strip().lower()
+                        timeout_ms = int(data.get('timeout_ms') or data.get('timeout') or 15000)
+                        if selector:
+                            if state not in ('visible', 'attached', 'hidden', 'detached'):
+                                state = 'visible'
+                            curr_page.locator(selector).first.wait_for(state=state, timeout=timeout_ms)
+                            result_holder["payload"] = {"status": "ok", "waited_for": f"selector:{selector}", "state": state, "url": curr_page.url}
+                        elif text_wait:
+                            curr_page.get_by_text(str(text_wait), exact=False).first.wait_for(state='visible', timeout=timeout_ms)
+                            result_holder["payload"] = {"status": "ok", "waited_for": f"text:{text_wait}", "url": curr_page.url}
+                        else:
+                            load_state = str(data.get('load_state') or 'networkidle').strip().lower()
+                            if load_state not in ('load', 'domcontentloaded', 'networkidle'):
+                                load_state = 'networkidle'
+                            curr_page.wait_for_load_state(load_state, timeout=timeout_ms)
+                            result_holder["payload"] = {"status": "ok", "waited_for": f"load_state:{load_state}", "url": curr_page.url}
+
+                    elif endpoint == '/select':
+                        selector = data.get('selector')
+                        if not selector:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": "Parameter 'selector' is required."}
+                        else:
+                            loc = curr_page.locator(selector).first
+                            if data.get('value') is not None:
+                                selected = loc.select_option(value=str(data['value']))
+                            elif data.get('label') is not None:
+                                selected = loc.select_option(label=str(data['label']))
+                            elif data.get('index') is not None:
+                                selected = loc.select_option(index=int(data['index']))
+                            else:
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {"error": "One of 'value', 'label', or 'index' is required."}
+                                continue
+                            result_holder["payload"] = {"status": "ok", "selector": selector, "selected": selected}
+
+                    elif endpoint == '/cookies':
+                        c_action = str(data.get('action') or 'get').strip().lower()
+                        c_container = str(data.get('container') or '').strip()
+                        store_id = "firefox-default"
+                        c_name_out = "default"
+                        if c_container:
+                            ident, all_containers = resolve_container(c_container, profile_dir)
+                            if not ident:
+                                avail = [c.get("name") for c in all_containers]
+                                result_holder["http_status"] = 400
+                                result_holder["payload"] = {
+                                    "error": f"Container '{c_container}' not found. Available containers: {', '.join(avail) if avail else '(none)'}.",
+                                    "available_containers": all_containers
+                                }
+                                continue
+                            store_id = ident["cookieStoreId"]
+                            c_name_out = ident["name"]
+
+                        if c_action == 'get':
+                            res_ck = call_container_bridge("get_cookies", {
+                                "cookieStoreId": store_id,
+                                "domain": data.get("domain"),
+                                "url": data.get("url"),
+                            }, timeout=10.0)
+                        elif c_action == 'set':
+                            res_ck = call_container_bridge("set_cookie", {
+                                "cookieStoreId": store_id,
+                                "url": data.get("url"),
+                                "name": data.get("name"),
+                                "value": data.get("value"),
+                                "domain": data.get("domain"),
+                                "path": data.get("path"),
+                                "secure": data.get("secure"),
+                                "httpOnly": data.get("httpOnly"),
+                                "expirationDate": data.get("expirationDate"),
+                            }, timeout=10.0)
+                        elif c_action == 'clear':
+                            res_ck = call_container_bridge("clear_cookies", {
+                                "cookieStoreId": store_id,
+                                "domain": data.get("domain"),
+                                "url": data.get("url"),
+                            }, timeout=10.0)
+                        else:
+                            result_holder["http_status"] = 400
+                            result_holder["payload"] = {"error": f"Invalid cookies action '{c_action}'. Use 'get', 'set', or 'clear'."}
+                            continue
+
+                        if not res_ck.get("ok"):
+                            result_holder["http_status"] = 500
+                            result_holder["payload"] = {"error": res_ck.get("error", "Cookie operation failed")}
+                        else:
+                            res_ck["status"] = "ok"
+                            res_ck["container"] = c_name_out
+                            result_holder["payload"] = res_ck
 
                     elif endpoint == '/switch_tab':
                         raw_sw = data.get('index') if data.get('index') is not None else req_tab_index
