@@ -445,6 +445,87 @@ def detect_proxy_geo(proxy_cfg, explicit_timezone=None, explicit_locale=None, au
     return geo if geo else None
 
 
+def build_geo_init_script(geo):
+    if not isinstance(geo, dict):
+        return None
+    if not (geo.get("timezone") or geo.get("locale") or isinstance(geo.get("lat"), (int, float))):
+        return None
+    payload = json.dumps({
+        "timezone": geo.get("timezone"),
+        "locale": geo.get("locale"),
+        "languages": geo.get("languages") or ([geo["locale"], geo["locale"].split("-")[0]] if geo.get("locale") else None),
+        "lat": geo.get("lat") if isinstance(geo.get("lat"), (int, float)) else None,
+        "lon": geo.get("lon") if isinstance(geo.get("lon"), (int, float)) else None,
+    })
+    return f"""(() => {{
+  try {{
+    const cfg = {payload};
+    window.__camoufoxGeoApplied = true;
+    if (cfg.locale) {{
+      Object.defineProperty(Navigator.prototype, "language", {{
+        get: () => cfg.locale,
+        configurable: true
+      }});
+    }}
+    if (Array.isArray(cfg.languages) && cfg.languages.length > 0) {{
+      const langs = Object.freeze([...cfg.languages]);
+      Object.defineProperty(Navigator.prototype, "languages", {{
+        get: () => langs,
+        configurable: true
+      }});
+    }}
+    if (cfg.timezone) {{
+      const tz = cfg.timezone;
+      const OrigDTF = Intl.DateTimeFormat;
+      const PatchedDTF = function DateTimeFormat(locales, options) {{
+        const opts = Object.assign({{}}, options || {{}});
+        if (!opts.timeZone) opts.timeZone = tz;
+        const loc = locales !== undefined ? locales : (cfg.locale || undefined);
+        return new OrigDTF(loc, opts);
+      }};
+      PatchedDTF.prototype = OrigDTF.prototype;
+      PatchedDTF.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+      Intl.DateTimeFormat = PatchedDTF;
+
+      const origResolved = OrigDTF.prototype.resolvedOptions;
+      OrigDTF.prototype.resolvedOptions = function () {{
+        const res = origResolved.call(this);
+        if (res && !res.timeZone) res.timeZone = tz;
+        return res;
+      }};
+
+      const computeOffset = (date) => {{
+        try {{
+          const parts = new OrigDTF("en-US", {{
+            timeZone: tz,
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+            hour12: false
+          }}).formatToParts(date);
+          const map = {{}};
+          for (const p of parts) map[p.type] = p.value;
+          const h = map.hour === "24" ? "00" : map.hour;
+          const asUtc = Date.UTC(
+            Number(map.year), Number(map.month) - 1, Number(map.day),
+            Number(h), Number(map.minute), Number(map.second)
+          );
+          return Math.round((date.getTime() - asUtc) / 60000);
+        }} catch (_) {{ return 0; }}
+      }};
+      Date.prototype.getTimezoneOffset = function () {{ return computeOffset(this); }};
+    }}
+    if (typeof cfg.lat === "number" && typeof cfg.lon === "number" && navigator.geolocation) {{
+      const mockPos = () => ({{
+        coords: {{ latitude: cfg.lat, longitude: cfg.lon, accuracy: 35, altitude: null, altitudeAccuracy: null, heading: null, speed: null }},
+        timestamp: Date.now()
+      }});
+      navigator.geolocation.getCurrentPosition = (cb) => {{ if (typeof cb === "function") setTimeout(() => cb(mockPos()), 10); }};
+      navigator.geolocation.watchPosition = (cb) => {{ if (typeof cb === "function") setTimeout(() => cb(mockPos()), 10); return 1; }};
+    }}
+  }} catch (_) {{}}
+}})();"""
+
+
 def cleanup_old_screenshots(d_dir, max_files=None):
     try:
         limit = max_files if max_files is not None else int(os.getenv("SCREENSHOT_MAX_FILES", "50"))
@@ -1392,6 +1473,12 @@ def main():
                                     continue
 
                                 page_containers[container_page] = ident["name"]
+                                geo_js = build_geo_init_script(ident.get("geo"))
+                                if geo_js:
+                                    try:
+                                        container_page.add_init_script(geo_js)
+                                    except Exception:
+                                        pass
                                 try:
                                     if launcher_page != container_page and not launcher_page.is_closed() and len([p for p in browser.pages if not p.is_closed()]) > 1:
                                         launcher_page.close(run_before_unload=False)
@@ -1409,6 +1496,11 @@ def main():
                                     curr_page.wait_for_load_state("domcontentloaded", timeout=min(timeout, 15000))
                                 except Exception:
                                     pass
+                                if geo_js:
+                                    try:
+                                        curr_page.evaluate(geo_js)
+                                    except Exception:
+                                        pass
 
                                 page_title = safe_get_title(curr_page)
                                 status_cache["url"] = curr_page.url
@@ -2085,6 +2177,12 @@ def main():
                                 continue
 
                             page_containers[new_p] = ident["name"]
+                            geo_js = build_geo_init_script(ident.get("geo"))
+                            if geo_js:
+                                try:
+                                    new_p.add_init_script(geo_js)
+                                except Exception:
+                                    pass
                             active_pages = [p for p in browser.pages if not p.is_closed()]
                             active_tab_index = active_pages.index(new_p) if new_p in active_pages else len(active_pages) - 1
                             curr_page = active_pages[active_tab_index]
@@ -2096,6 +2194,11 @@ def main():
                                 curr_page.wait_for_load_state("domcontentloaded", timeout=15000)
                             except Exception:
                                 pass
+                            if geo_js:
+                                try:
+                                    curr_page.evaluate(geo_js)
+                                except Exception:
+                                    pass
                             page_title = safe_get_title(curr_page)
                             status_cache["url"] = curr_page.url
                             status_cache["title"] = page_title

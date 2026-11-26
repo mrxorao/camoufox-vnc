@@ -327,15 +327,27 @@ async function handleCommand(cmd) {
     if (cmd.secure !== undefined) details.secure = Boolean(cmd.secure);
     if (cmd.httpOnly !== undefined) details.httpOnly = Boolean(cmd.httpOnly);
     if (cmd.expirationDate !== undefined) details.expirationDate = Number(cmd.expirationDate);
-    let setRes = await browser.cookies.set(details);
-    if (!setRes) {
+    let setRes = null;
+    let lastErr = null;
+    const attempts = [
+      details,
+      { ...details, firstPartyDomain: "" },
+    ];
+    try {
+      const u = new URL(details.url);
+      attempts.push({ ...details, firstPartyDomain: u.hostname });
+      attempts.push({ ...details, domain: u.hostname, path: details.path || "/", firstPartyDomain: "" });
+    } catch (_) {}
+    for (const att of attempts) {
       try {
-        const u = new URL(details.url);
-        setRes = await browser.cookies.set({ ...details, firstPartyDomain: u.hostname });
-      } catch (_) {}
+        setRes = await browser.cookies.set(att);
+        if (setRes) break;
+      } catch (e) {
+        lastErr = String(e && e.message ? e.message : e);
+      }
     }
     if (!setRes) {
-      return { ok: false, error: `Failed to set cookie '${details.name}' for '${details.url}'.` };
+      return { ok: false, error: `Failed to set cookie '${details.name}' for '${details.url}'${lastErr ? `: ${lastErr}` : "."}` };
     }
     return { ok: true, cookie: setRes };
   }
