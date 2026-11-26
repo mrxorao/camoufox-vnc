@@ -747,21 +747,28 @@ def ensure_container_juggler_support():
             if not os.path.isfile(omni_path):
                 continue
             needs_patch = False
+            target_reg_entry = None
+            browser_handler_entry = None
             with zipfile.ZipFile(omni_path, "r") as zin:
-                namelist = zin.namelist()
-                if "chrome/juggler/content/TargetRegistry.js" in namelist:
-                    data = zin.read("chrome/juggler/content/TargetRegistry.js").decode("utf-8")
+                for fname in zin.namelist():
+                    if fname.endswith("/TargetRegistry.js") and "juggler" in fname:
+                        target_reg_entry = fname
+                    elif fname.endswith("/BrowserHandler.js") and "juggler" in fname:
+                        browser_handler_entry = fname
+
+                if target_reg_entry:
+                    data = zin.read(target_reg_entry).decode("utf-8")
                     if "[JUGGLER DUMP]" not in data:
                         needs_patch = True
-                if "chrome/juggler/content/protocol/BrowserHandler.js" in namelist:
-                    b_data = zin.read("chrome/juggler/content/protocol/BrowserHandler.js").decode("utf-8")
+                if browser_handler_entry:
+                    b_data = zin.read(browser_handler_entry).decode("utf-8")
                     if "_shouldAttachToTarget(target) {\n    if (this._createdBrowserContextIds" in b_data:
                         needs_patch = True
 
             if not needs_patch:
                 continue
 
-            print(f"[Camoufox Container Support] Patching Juggler container support in: {omni_path}", flush=True)
+            print(f"[Camoufox Container Support] Patching Juggler container support in: {omni_path} ({target_reg_entry}, {browser_handler_entry})", flush=True)
             bak_path = omni_path + ".bak"
             if not os.path.exists(bak_path):
                 shutil.copy2(omni_path, bak_path)
@@ -771,7 +778,7 @@ def ensure_container_juggler_support():
                 with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_STORED) as zout:
                     for item in zin.infolist():
                         file_data = zin.read(item.filename)
-                        if item.filename == "chrome/juggler/content/TargetRegistry.js":
+                        if target_reg_entry and item.filename == target_reg_entry:
                             text = file_data.decode("utf-8")
                             old_const = "const userContextId = tab.userContextId;\n      const browserContext = this._userContextIdToBrowserContext.get(userContextId);"
                             new_const = 'const userContextId = tab.userContextId;\n      dump("[JUGGLER DUMP] onTabOpen userContextId=" + userContextId + "\\n");\n      const browserContext = this._userContextIdToBrowserContext.get(userContextId) || this._defaultContext || this._userContextIdToBrowserContext.get(0);'
@@ -786,7 +793,7 @@ def ensure_container_juggler_support():
                             text = text.replace(old_err3, "// container resolved")
                             text = text.replace(old_net, new_net)
                             file_data = text.encode("utf-8")
-                        elif item.filename == "chrome/juggler/content/protocol/BrowserHandler.js":
+                        elif browser_handler_entry and item.filename == browser_handler_entry:
                             text = file_data.decode("utf-8")
                             old_should = "_shouldAttachToTarget(target) {\n    if (this._createdBrowserContextIds"
                             new_should = "_shouldAttachToTarget(target) {\n    return true;\n    if (this._createdBrowserContextIds"
