@@ -1,120 +1,127 @@
 /**
  * Camoufox Container Geo Spoof (Content Script, run_at: document_start)
  *
- * Applies per-container timezone, locale and geolocation overrides when the
- * active container has a custom proxy/geo profile configured.
+ * Uses Firefox's native window.wrappedJSObject / exportFunction (immune to page CSP)
+ * to apply per-container timezone, locale and geolocation overrides.
  */
 (function () {
-  function injectGeoOverride(geo) {
+  function applyGeoToPage(geo) {
     if (!geo || (!geo.timezone && !geo.locale && geo.lat === undefined)) {
       return;
     }
-    const payload = JSON.stringify({
-      timezone: geo.timezone || null,
-      locale: geo.locale || null,
-      languages: geo.languages || (geo.locale ? [geo.locale, geo.locale.split("-")[0]] : null),
-      lat: typeof geo.lat === "number" ? geo.lat : null,
-      lon: typeof geo.lon === "number" ? geo.lon : null,
-    });
+    const pageWin = window.wrappedJSObject || window;
+    try {
+      if (pageWin.__camoufoxGeoApplied) return;
+      pageWin.__camoufoxGeoApplied = true;
 
-    const script = document.createElement("script");
-    script.textContent = `(() => {
-      try {
-        if (window.__camoufoxGeoApplied) return;
-        window.__camoufoxGeoApplied = true;
-        const cfg = ${payload};
-
-        if (cfg.locale) {
-          Object.defineProperty(Navigator.prototype, "language", {
-            get: () => cfg.locale,
-            configurable: true
-          });
+      if (geo.locale) {
+        const loc = String(geo.locale);
+        const navProto = pageWin.Navigator && pageWin.Navigator.prototype;
+        if (navProto) {
+          pageWin.Object.defineProperty(navProto, "language", cloneInto({
+            get: exportFunction(() => loc, pageWin),
+            configurable: true,
+          }, pageWin, { cloneFunctions: true }));
         }
-        if (Array.isArray(cfg.languages) && cfg.languages.length > 0) {
-          const langs = Object.freeze([...cfg.languages]);
-          Object.defineProperty(Navigator.prototype, "languages", {
-            get: () => langs,
-            configurable: true
-          });
+      }
+
+      const langsArr = Array.isArray(geo.languages) && geo.languages.length > 0
+        ? geo.languages
+        : (geo.locale ? [geo.locale, geo.locale.split("-")[0]] : null);
+      if (langsArr) {
+        const clonedLangs = cloneInto(langsArr, pageWin);
+        const navProto = pageWin.Navigator && pageWin.Navigator.prototype;
+        if (navProto) {
+          pageWin.Object.defineProperty(navProto, "languages", cloneInto({
+            get: exportFunction(() => clonedLangs, pageWin),
+            configurable: true,
+          }, pageWin, { cloneFunctions: true }));
         }
+      }
 
-        if (cfg.timezone) {
-          const tz = cfg.timezone;
-          const OrigDTF = Intl.DateTimeFormat;
-          const PatchedDTF = function DateTimeFormat(locales, options) {
-            const opts = Object.assign({}, options || {});
-            if (!opts.timeZone) opts.timeZone = tz;
-            const loc = locales !== undefined ? locales : (cfg.locale || undefined);
-            return new OrigDTF(loc, opts);
-          };
-          PatchedDTF.prototype = OrigDTF.prototype;
-          PatchedDTF.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
-          Intl.DateTimeFormat = PatchedDTF;
+      if (geo.timezone) {
+        const tz = String(geo.timezone);
+        const loc = geo.locale ? String(geo.locale) : undefined;
+        const OrigDTF = pageWin.Intl.DateTimeFormat;
 
-          const origResolved = OrigDTF.prototype.resolvedOptions;
-          OrigDTF.prototype.resolvedOptions = function () {
-            const res = origResolved.call(this);
-            if (!res.timeZone) res.timeZone = tz;
-            return res;
-          };
+        const PatchedDTF = exportFunction(function DateTimeFormat(locales, options) {
+          const opts = options ? Object.assign({}, options) : {};
+          if (!opts.timeZone) opts.timeZone = tz;
+          const effLoc = locales !== undefined ? locales : loc;
+          return new OrigDTF(effLoc, cloneInto(opts, pageWin));
+        }, pageWin);
 
-          const computeOffsetMinutes = (date) => {
-            try {
-              const parts = new OrigDTF("en-US", {
-                timeZone: tz,
-                year: "numeric", month: "2-digit", day: "2-digit",
-                hour: "2-digit", minute: "2-digit", second: "2-digit",
-                hour12: false
-              }).formatToParts(date);
-              const map = {};
-              for (const p of parts) map[p.type] = p.value;
-              const h = map.hour === "24" ? "00" : map.hour;
-              const asUtc = Date.UTC(
-                Number(map.year), Number(map.month) - 1, Number(map.day),
-                Number(h), Number(map.minute), Number(map.second)
-              );
-              return Math.round((date.getTime() - asUtc) / 60000);
-            } catch (_) {
-              return 0;
-            }
-          };
+        PatchedDTF.prototype = OrigDTF.prototype;
+        pageWin.Intl.DateTimeFormat = PatchedDTF;
 
-          Date.prototype.getTimezoneOffset = function () {
-            return computeOffsetMinutes(this);
-          };
-        }
+        const origResolved = OrigDTF.prototype.resolvedOptions;
+        OrigDTF.prototype.resolvedOptions = exportFunction(function () {
+          const res = origResolved.call(this);
+          if (res && !res.timeZone) {
+            res.timeZone = tz;
+          }
+          return res;
+        }, pageWin);
 
-        if (typeof cfg.lat === "number" && typeof cfg.lon === "number" && navigator.geolocation) {
-          const mockPos = () => ({
-            coords: {
-              latitude: cfg.lat,
-              longitude: cfg.lon,
-              accuracy: 35,
-              altitude: null,
-              altitudeAccuracy: null,
-              heading: null,
-              speed: null
-            },
-            timestamp: Date.now()
-          });
-          navigator.geolocation.getCurrentPosition = (success) => {
-            if (typeof success === "function") setTimeout(() => success(mockPos()), 10);
-          };
-          navigator.geolocation.watchPosition = (success) => {
-            if (typeof success === "function") setTimeout(() => success(mockPos()), 10);
-            return 1;
-          };
-        }
-      } catch (_) {}
-    })();`;
-    (document.documentElement || document.head || document).appendChild(script);
-    script.remove();
+        const getOffsetFn = exportFunction(function () {
+          try {
+            const parts = new Intl.DateTimeFormat("en-US", {
+              timeZone: tz,
+              year: "numeric", month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit", second: "2-digit",
+              hour12: false,
+            }).formatToParts(new Date(this.getTime()));
+            const map = {};
+            for (const p of parts) map[p.type] = p.value;
+            const h = map.hour === "24" ? "00" : map.hour;
+            const asUtc = Date.UTC(
+              Number(map.year), Number(map.month) - 1, Number(map.day),
+              Number(h), Number(map.minute), Number(map.second)
+            );
+            return Math.round((this.getTime() - asUtc) / 60000);
+          } catch (_) {
+            return 0;
+          }
+        }, pageWin);
+
+        pageWin.Date.prototype.getTimezoneOffset = getOffsetFn;
+      }
+
+      if (typeof geo.lat === "number" && typeof geo.lon === "number" && pageWin.navigator && pageWin.navigator.geolocation) {
+        const lat = geo.lat;
+        const lon = geo.lon;
+        const makePos = () => cloneInto({
+          coords: {
+            latitude: lat,
+            longitude: lon,
+            accuracy: 35,
+            altitude: null,
+            altitudeAccuracy: null,
+            heading: null,
+            speed: null,
+          },
+          timestamp: Date.now(),
+        }, pageWin);
+
+        pageWin.navigator.geolocation.getCurrentPosition = exportFunction((success) => {
+          if (typeof success === "function") {
+            setTimeout(() => success(makePos()), 10);
+          }
+        }, pageWin);
+        pageWin.navigator.geolocation.watchPosition = exportFunction((success) => {
+          if (typeof success === "function") {
+            setTimeout(() => success(makePos()), 10);
+          }
+          return 1;
+        }, pageWin);
+      }
+    } catch (_) {}
   }
 
   try {
     browser.runtime.sendMessage({ type: "get_tab_geo" }).then((resp) => {
       if (resp && resp.geo) {
-        injectGeoOverride(resp.geo);
+        applyGeoToPage(resp.geo);
       }
     }).catch(() => {});
   } catch (_) {}

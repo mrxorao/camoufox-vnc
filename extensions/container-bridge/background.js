@@ -285,10 +285,15 @@ async function handleCommand(cmd) {
 
   if (action === "get_cookies") {
     const storeId = String(cmd.cookieStoreId || "firefox-default");
-    const query = { storeId };
+    const query = { storeId, firstPartyDomain: null };
     if (cmd.domain) query.domain = String(cmd.domain);
     if (cmd.url) query.url = String(cmd.url);
-    const cookies = await browser.cookies.getAll(query);
+    let cookies = [];
+    try {
+      cookies = await browser.cookies.getAll({ ...query, partitionKey: {} });
+    } catch (_) {
+      cookies = await browser.cookies.getAll(query);
+    }
     return {
       ok: true,
       cookieStoreId: storeId,
@@ -322,27 +327,44 @@ async function handleCommand(cmd) {
     if (cmd.secure !== undefined) details.secure = Boolean(cmd.secure);
     if (cmd.httpOnly !== undefined) details.httpOnly = Boolean(cmd.httpOnly);
     if (cmd.expirationDate !== undefined) details.expirationDate = Number(cmd.expirationDate);
-    const setRes = await browser.cookies.set(details);
+    let setRes = await browser.cookies.set(details);
+    if (!setRes) {
+      try {
+        const u = new URL(details.url);
+        setRes = await browser.cookies.set({ ...details, firstPartyDomain: u.hostname });
+      } catch (_) {}
+    }
+    if (!setRes) {
+      return { ok: false, error: `Failed to set cookie '${details.name}' for '${details.url}'.` };
+    }
     return { ok: true, cookie: setRes };
   }
 
   if (action === "clear_cookies") {
     const storeId = String(cmd.cookieStoreId || "firefox-default");
-    const query = { storeId };
+    const query = { storeId, firstPartyDomain: null };
     if (cmd.domain) query.domain = String(cmd.domain);
     if (cmd.url) query.url = String(cmd.url);
-    const cookies = await browser.cookies.getAll(query);
+    let cookies = [];
+    try {
+      cookies = await browser.cookies.getAll({ ...query, partitionKey: {} });
+    } catch (_) {
+      cookies = await browser.cookies.getAll(query);
+    }
     let removedCount = 0;
     for (const c of cookies) {
       const proto = c.secure ? "https://" : "http://";
       const cleanDomain = (c.domain || "").replace(/^\./, "");
       const cookieUrl = `${proto}${cleanDomain}${c.path || "/"}`;
       try {
-        await browser.cookies.remove({
+        const rmOpts = {
           url: cookieUrl,
           name: c.name,
           storeId,
-        });
+        };
+        if (c.firstPartyDomain !== undefined) rmOpts.firstPartyDomain = c.firstPartyDomain;
+        if (c.partitionKey !== undefined) rmOpts.partitionKey = c.partitionKey;
+        await browser.cookies.remove(rmOpts);
         removedCount++;
       } catch (_) {}
     }
