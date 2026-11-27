@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <title>Camoufox Containers & Proxies</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icon.svg" alt="" class="logo" />
+      <div>
+        <div class="title">Camoufox Containers</div>
+        <div class="subtitle" id="statusText">A ligar...</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btnRefresh" class="btn-icon" title="Atualizar">↻</button>
+      <button id="btnNew" class="btn-primary">+ Novo</button>
+    </div>
+  </header>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <main id="listView" class="content">
+    <div id="containersList" class="cards"></div>
+    <div id="emptyState" class="empty hidden">
+      <div class="empty-icon">📦</div>
+      <div>Sem containers criados.</div>
+      <div class="empty-sub">Clica em <strong>+ Novo</strong> para criar o primeiro container com ou sem proxy.</div>
+    </div>
+  </main>
+
+  <section id="formView" class="content hidden">
+    <div class="form-header">
+      <h2 id="formTitle">Novo Container</h2>
+      <button id="btnCancel" class="btn-ghost">✕ Voltar</button>
+    </div>
+
+    <form id="containerForm" class="form">
+      <input type="hidden" id="editMode" value="create" />
+      <input type="hidden" id="editOriginalName" value="" />
+
+      <div class="field" id="nameField">
+        <label for="fName">Nome do Container *</label>
+        <input id="fName" type="text" placeholder="Ex: Brasil, Espanha, Trabalho" required />
+      </div>
+
+      <div class="row-2" id="appearanceFields">
+        <div class="field">
+          <label>Cor</label>
+          <div id="colorPicker" class="color-picker"></div>
+          <input type="hidden" id="fColor" value="blue" />
+        </div>
+        <div class="field">
+          <label for="fIcon">Ícone</label>
+          <select id="fIcon">
+            <option value="fingerprint">Fingerprint</option>
+            <option value="briefcase">Trabalho (Briefcase)</option>
+            <option value="dollar">Finanças (Dollar)</option>
+            <option value="cart">Compras (Cart)</option>
+            <option value="vacation">Viagem (Vacation)</option>
+            <option value="circle">Círculo</option>
+            <option value="gift">Presente</option>
+            <option value="food">Comida</option>
+            <option value="pet">Animal</option>
+            <option value="tree">Árvore</option>
+            <option value="chill">Chill</option>
+            <option value="fence">Fence</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="fProxy">Proxy (opcional)</label>
+        <input id="fProxy" type="text" placeholder="http://user:pass@host:port ou socks5://host:1080" />
+        <small>Vazio = usa a rota padrão (VPN). Suporta http, https, socks5, socks4.</small>
+      </div>
+
+      <div class="field">
+        <label for="fDataSaver">Poupança de Dados (Data Saver)</label>
+        <select id="fDataSaver">
+          <option value="off">Off (carrega tudo)</option>
+          <option value="smart">Smart (bloqueia media + trackers — seguro anti-bot)</option>
+          <option value="media">Media (só vídeos/áudio)</option>
+          <option value="images">Images (bloqueia imagens + media + trackers)</option>
+          <option value="aggressive">Aggressive (imagens + media + fontes + trackers)</option>
+        </select>
+      </div>
+
+      <details class="advanced">
+        <summary>GeoIP / Timezone / GPS (opcional)</summary>
+        <div class="advanced-body">
+          <label class="checkbox-row">
+            <input id="fAutoGeo" type="checkbox" checked />
+            <span>Detetar automaticamente país, timezone, locale e GPS pelo IP do proxy</span>
+          </label>
+          <div class="row-2">
+            <div class="field">
+              <label for="fTimezone">Timezone (override)</label>
+              <input id="fTimezone" type="text" placeholder="America/Sao_Paulo" />
+            </div>
+            <div class="field">
+              <label for="fLocale">Locale (override)</label>
+              <input id="fLocale" type="text" placeholder="pt-BR" />
+            </div>
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label for="fLat">Latitude GPS</label>
+              <input id="fLat" type="number" step="any" placeholder="41.1579" />
+            </div>
+            <div class="field">
+              <label for="fLon">Longitude GPS</label>
+              <input id="fLon" type="number" step="any" placeholder="-8.6291" />
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="form-actions">
+        <button type="button" id="btnRemoveProxy" class="btn-danger-outline hidden">Remover Proxy</button>
+        <button type="submit" id="btnSubmit" class="btn-primary">Guardar</button>
+      </div>
+    </form>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1074,6 +1074,9 @@ def main():
                 data["policies"]["ExtensionSettings"]["@testpilot-containers"] = {
                     "default_area": "navbar"
                 }
+                data["policies"]["ExtensionSettings"]["container-bridge@camoufox.local"] = {
+                    "default_area": "navbar"
+                }
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
             except Exception:
@@ -1193,8 +1196,11 @@ def main():
     bridge_ext_dir = os.getenv("CONTAINER_BRIDGE_EXT_DIR", "/opt/camoufox-extensions/container-bridge")
     if os.path.isdir(bridge_ext_dir):
         try:
+            ext_cfg = {"api_port": api_port}
+            if os.getenv("CAMOUFOX_API_KEY", "").strip():
+                ext_cfg["api_key"] = os.getenv("CAMOUFOX_API_KEY", "").strip()
             with open(os.path.join(bridge_ext_dir, "config.json"), "w", encoding="utf-8") as cfg_f:
-                json.dump({"api_port": api_port}, cfg_f)
+                json.dump(ext_cfg, cfg_f)
         except Exception as e_cfg:
             print(f"[Camoufox Container Bridge] Warning writing config.json: {e_cfg}", flush=True)
         camoufox_kwargs["addons"] = [bridge_ext_dir]
