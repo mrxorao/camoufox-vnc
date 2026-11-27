@@ -374,7 +374,7 @@ def build_requests_proxy_url(cfg):
     return f"{scheme}://{auth}{cfg['host']}:{cfg['port']}"
 
 
-def detect_proxy_geo(proxy_cfg, explicit_timezone=None, explicit_locale=None, auto_geo=True):
+def detect_proxy_geo(proxy_cfg, explicit_timezone=None, explicit_locale=None, auto_geo=True, explicit_lat=None, explicit_lon=None):
     """Auto-detect IP, country, timezone, locale and coordinates through the container's proxy."""
     geo = {}
     if auto_geo and isinstance(proxy_cfg, dict) and proxy_cfg.get("host"):
@@ -436,6 +436,13 @@ def detect_proxy_geo(proxy_cfg, explicit_timezone=None, explicit_locale=None, au
         geo["timezone"] = str(explicit_timezone).strip()
     if explicit_locale:
         geo["locale"] = str(explicit_locale).strip()
+    if explicit_lat is not None and explicit_lon is not None:
+        lat_f = float(explicit_lat)
+        lon_f = float(explicit_lon)
+        if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lon_f <= 180.0):
+            raise ValueError("latitude must be between -90 and 90, and longitude between -180 and 180.")
+        geo["lat"] = lat_f
+        geo["lon"] = lon_f
 
     if geo.get("locale"):
         loc = geo["locale"]
@@ -2380,6 +2387,8 @@ def main():
                         c_timezone = data.get('timezone')
                         c_locale = data.get('locale')
                         c_auto_geo = data.get('auto_geo', True)
+                        c_lat = data.get('latitude') if data.get('latitude') is not None else data.get('lat')
+                        c_lon = data.get('longitude') if data.get('longitude') is not None else data.get('lon')
                         c_data_saver = str(data.get('data_saver') or 'off').strip().lower()
                         if c_data_saver not in VALID_DATA_SAVER_MODES:
                             result_holder["http_status"] = 400
@@ -2418,12 +2427,19 @@ def main():
                             else:
                                 created = dict(res_create["container"])
                                 store_id = created.get("cookieStoreId")
-                                geo_profile = detect_proxy_geo(
-                                    parsed_proxy,
-                                    explicit_timezone=c_timezone,
-                                    explicit_locale=c_locale,
-                                    auto_geo=bool(c_auto_geo),
-                                )
+                                try:
+                                    geo_profile = detect_proxy_geo(
+                                        parsed_proxy,
+                                        explicit_timezone=c_timezone,
+                                        explicit_locale=c_locale,
+                                        auto_geo=bool(c_auto_geo),
+                                        explicit_lat=c_lat,
+                                        explicit_lon=c_lon,
+                                    )
+                                except ValueError as ve:
+                                    result_holder["http_status"] = 400
+                                    result_holder["payload"] = {"error": str(ve)}
+                                    continue
                                 if (parsed_proxy or geo_profile or c_data_saver != "off") and store_id:
                                     entry = dict(parsed_proxy) if parsed_proxy else {}
                                     if geo_profile:
@@ -2450,6 +2466,8 @@ def main():
                         c_timezone = data.get('timezone')
                         c_locale = data.get('locale')
                         c_auto_geo = data.get('auto_geo', True)
+                        c_lat = data.get('latitude') if data.get('latitude') is not None else data.get('lat')
+                        c_lon = data.get('longitude') if data.get('longitude') is not None else data.get('lon')
                         c_data_saver_raw = data.get('data_saver')
                         if c_data_saver_raw is not None:
                             c_data_saver = str(c_data_saver_raw).strip().lower()
@@ -2495,15 +2513,27 @@ def main():
                                 else:
                                     parsed_proxy = existing_entry if existing_entry.get("host") else None
 
-                                if c_proxy_provided or c_timezone or c_locale:
-                                    geo_profile = detect_proxy_geo(
-                                        parsed_proxy,
-                                        explicit_timezone=c_timezone,
-                                        explicit_locale=c_locale,
-                                        auto_geo=bool(c_auto_geo),
-                                    )
+                                if c_proxy_provided or c_timezone or c_locale or (c_lat is not None and c_lon is not None):
+                                    try:
+                                        geo_profile = detect_proxy_geo(
+                                            parsed_proxy,
+                                            explicit_timezone=c_timezone,
+                                            explicit_locale=c_locale,
+                                            auto_geo=bool(c_auto_geo),
+                                            explicit_lat=c_lat,
+                                            explicit_lon=c_lon,
+                                        )
+                                    except ValueError as ve:
+                                        result_holder["http_status"] = 400
+                                        result_holder["payload"] = {"error": str(ve)}
+                                        continue
                                     if geo_profile:
-                                        existing_entry["geo"] = geo_profile
+                                        if not c_proxy_provided and isinstance(existing_entry.get("geo"), dict):
+                                            merged_geo = dict(existing_entry["geo"])
+                                            merged_geo.update(geo_profile)
+                                            existing_entry["geo"] = merged_geo
+                                        else:
+                                            existing_entry["geo"] = geo_profile
                                     elif c_proxy_provided and not parsed_proxy:
                                         existing_entry.pop("geo", None)
 

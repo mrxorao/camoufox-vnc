@@ -363,6 +363,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Optional manual locale override (e.g. 'pt-BR', 'pt-PT', 'en-US').",
             },
+            latitude: {
+              type: "number",
+              description: "Optional manual GPS latitude override (-90 to 90, e.g. 41.1579 for Porto). Pair with longitude.",
+            },
+            longitude: {
+              type: "number",
+              description: "Optional manual GPS longitude override (-180 to 180, e.g. -8.6291 for Porto). Pair with latitude.",
+            },
             data_saver: {
               type: "string",
               enum: ["off", "smart", "media", "images", "aggressive"],
@@ -394,6 +402,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             locale: {
               type: "string",
               description: "Optional manual locale override (e.g. 'pt-BR').",
+            },
+            latitude: {
+              type: "number",
+              description: "Optional manual GPS latitude override (-90 to 90). Pair with longitude.",
+            },
+            longitude: {
+              type: "number",
+              description: "Optional manual GPS longitude override (-180 to 180). Pair with latitude.",
             },
             data_saver: {
               type: "string",
@@ -828,6 +844,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
         if (args.timezone) payload.timezone = args.timezone;
         if (args.locale) payload.locale = args.locale;
+        if (args.latitude !== undefined) payload.latitude = Number(args.latitude);
+        if (args.longitude !== undefined) payload.longitude = Number(args.longitude);
         if (args.data_saver) payload.data_saver = args.data_saver;
         const res = await sendCmd("/containers/create", payload);
         if (res.error) {
@@ -837,8 +855,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const proxyInfo = c.proxy ? ` | proxy: ${c.proxy}` : " | proxy: default";
         const dsInfo = c.data_saver && c.data_saver !== "off" ? ` | data_saver: ${c.data_saver}` : "";
         const geo = c.geo || null;
+        const coordsStr = (geo && typeof geo.lat === "number" && typeof geo.lon === "number") ? `${geo.lat},${geo.lon}` : null;
         const geoInfo = geo
-          ? ` | geo: ${[geo.country, geo.timezone, geo.locale, geo.ip].filter(Boolean).join(", ")}`
+          ? ` | geo: ${[geo.country, geo.timezone, geo.locale, coordsStr, geo.ip].filter(Boolean).join(", ")}`
           : "";
         return {
           content: [{ type: "text", text: `📦 Container '${c.name}' created (${c.cookieStoreId}, color: ${c.color}, icon: ${c.icon}${proxyInfo}${dsInfo}${geoInfo}).` }],
@@ -851,6 +870,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.auto_geo !== undefined) payload.auto_geo = Boolean(args.auto_geo);
         if (args.timezone) payload.timezone = args.timezone;
         if (args.locale) payload.locale = args.locale;
+        if (args.latitude !== undefined) payload.latitude = Number(args.latitude);
+        if (args.longitude !== undefined) payload.longitude = Number(args.longitude);
         if (args.data_saver) payload.data_saver = args.data_saver;
         const res = await sendCmd("/containers/proxy", payload);
         if (res.error) {
